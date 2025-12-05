@@ -36,7 +36,7 @@ def load_many_tracks(folder_path, max_tracks=None, min_hits=6):
     files = sorted(glob.glob(os.path.join(folder_path, "*.csv")))
     print(f"Found {len(files)} tracks.")
 
-    S, X, Y, Z = [], [], [], []
+    S, X, Y, Z, F = [], [], [], [], []
 
     count = 0
     for f in files:
@@ -54,6 +54,7 @@ def load_many_tracks(folder_path, max_tracks=None, min_hits=6):
             X.append(x)
             Y.append(y)
             Z.append(z)
+            F.append(f[f.index("event"):-4])
 
             count += 1
             if max_tracks and count >= max_tracks:
@@ -63,4 +64,4 @@ def load_many_tracks(folder_path, max_tracks=None, min_hits=6):
             print(f"Skipping {f}: {e}")
 
     print(f"Loaded {len(S)} usable tracks.")
-    return S, X, Y, Z
+    return S, X, Y, Z, F
