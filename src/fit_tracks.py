@@ -5,9 +5,44 @@ import sympy as sp
 from os import system
 from scipy.optimize import least_squares
 from collections import defaultdict
+import pickle
+import os
 
 round_floats = lambda expr, ndigits: expr.xreplace({f: sp.Float(round(float(f), ndigits)) for f in expr.atoms(sp.Float)})
 OPEN = False
+
+def fit_until_both_conditions(s, y, model_kwargs, R2_THRESHOLD, min_iters=100, step=50, max_iters=np.inf):
+    """
+    Continue training PySR until BOTH:
+      - R^2 >= R2_THRESHOLD
+      - total iterations >= min_iters
+    Training stops if max_iters is reached.
+    """
+
+    model = PySRRegressor(**model_kwargs)
+    total_iters = 0
+    best_R2 = 0
+
+    while True:
+        # Run more iterations *without resetting the model*
+        model.niterations = total_iters + step
+        model.fit(s, y)
+        total_iters += step
+
+        # Compute R^2
+        R2 = model.score(s, y)
+        if R2 > best_R2:
+            print(f"New best R2 = {R2:.3f}")
+        # Check stopping condition
+        if total_iters >= min_iters and R2 >= R2_THRESHOLD:
+            break
+
+        # Safety: prevent infinite loops
+        if total_iters >= max_iters:
+            print(f"Stopping at max_iters={max_iters} with R2={R2:.3f}")
+            break
+
+    return model, R2, total_iters
 
 def sympy_to_latex_with_s(expr):
     """Return a LaTeX string with rounded floats and x0→s replacement."""
@@ -221,176 +256,334 @@ def summarize_3d_families(families_x, families_y, families_z, r2_x_all, r2_y_all
 
     return latex_table_3d, triple_id_map
 
-# Fix random seed
-np.random.seed(0)
-
-x_templates, y_templates, z_templates = [], [], []
-x_eqns, y_eqns, z_eqns = [], [], []   # store final numeric expressions used
-families_x, families_y, families_z = [], [], []  # indices of template used
-r2_x_all, r2_y_all, r2_z_all = [], [], [] # R^2 values for each track and coordinate
-
-track_folder = "../tracks_for_ed"
-S, X, Y, Z, F = load_many_tracks(track_folder, max_tracks=5)
-
-model_kwargs = dict(
-    niterations=100,
-    binary_operators=["+", "-", "*"],
-    unary_operators=["sin", "cos", "exp"],
-    maxsize=9,
-    model_selection="best",
-    elementwise_loss="loss(x, y) = (x - y)^2",
-    random_state=0,
-    deterministic=True,
-    procs=0,
-    multithreading=False
-)
-from pysr import PySRRegressor
-R2_THRESHOLD = 0.95
-
-for track_idx, (s_all, x_all, y_all, z_all, f_all) in enumerate(zip(S, X, Y, Z, F)):
-    s_all_reshaped = s_all.reshape(-1, 1)
-
-    # --- Helper inner function to handle one coordinate --- #
-    def fit_dimension(
-        s_data, y_data, templates, eqn_list, families_list, coord_name
-    ):
-        best_R2 = -np.inf
-        best_expr = None
-        best_template_index = None
-
-        # 1) Try existing templates
-        if templates:
-            for idx, template in enumerate(templates):
-                R2, p_opt, expr_fitted = fit_template_to_data(template, s_data, y_data)
-                if R2 > best_R2:
-                    best_R2 = R2
-                    best_expr = expr_fitted
-                    best_template_index = idx
-
-        # 2) If good enough, use best template
-        if templates and best_R2 >= R2_THRESHOLD:
-            print(f"[Track {track_idx} {coord_name}] Used existing template {best_template_index} with R^2={best_R2:.3f}")
-            eqn_list.append(best_expr)
-            families_list.append(best_template_index)
-            return best_expr, best_R2
-
-        # 3) Otherwise, run PySR to discover new form
-        model = PySRRegressor(**model_kwargs)
-        model.fit(s_data.reshape(-1, 1), y_data)
-        expr = model.sympy()
-
-        # Make parametric template from this expression
-        template = make_parametric_template(expr, s_name="x0")
-        templates.append(template)
-        new_template_index = len(templates) - 1
-
-        # For consistency, also treat this as "fitted" expression (with its initial parameters)
-        R2_new, _, expr_fitted_new = fit_template_to_data(template, s_data, y_data)
-
-        eqn_list.append(expr_fitted_new)
-        families_list.append(new_template_index)
-
-        return expr_fitted_new, R2_new
-
-    # --- Fit x, y, z this track --- #
-    expr_x, r2_x = fit_dimension(s_all, x_all, x_templates, x_eqns, families_x, "x")
-    expr_y, r2_y = fit_dimension(s_all, y_all, y_templates, y_eqns, families_y, "y")
-    expr_z, r2_z = fit_dimension(s_all, z_all, z_templates, z_eqns, families_z, "z")
+if __name__ == '__main__':
+    # Fix random seed
+    np.random.seed(0)
+    TEMPLATE_PATH = "track_templates.pkl"
+    loaded = {}
+    x_templates, y_templates, z_templates = [], [], []
     
-    # Store R^2 values for summaries
-    r2_x_all.append(r2_x)
-    r2_y_all.append(r2_y)
-    r2_z_all.append(r2_z)
+    if os.path.exists(TEMPLATE_PATH):
+        print("Loading existing template library...")
+        with open(TEMPLATE_PATH, "rb") as f:
+            loaded = pickle.load(f)
 
-    # LaTeX strings
-    eq_x = r"$x(s) = " + sympy_to_latex_with_s(expr_x) + "$"
-    eq_y = r"$y(s) = " + sympy_to_latex_with_s(expr_y) + "$"
-    eq_z = r"$z(s) = " + sympy_to_latex_with_s(expr_z) + "$"
+        x_templates = loaded["x_templates"]
+        y_templates = loaded["y_templates"]
+        z_templates = loaded["z_templates"]
 
-    # Plotting using the fitted expressions
-    # (build numpy callables from expr_x, expr_y, expr_z)
-    s_sym = sp.Symbol("x0")  # your internal variable name
-    fx = sp.lambdify(s_sym, expr_x, "numpy")
-    fy = sp.lambdify(s_sym, expr_y, "numpy")
-    fz = sp.lambdify(s_sym, expr_z, "numpy")
+    else:
+        print("No template file found — starting with empty template lists.")
+        
+    # ------------------------------------------------------------------
+    # Seed templates from previously discovered families (second run)
+    # ------------------------------------------------------------------
+    s = sp.Symbol("s")  # we'll use 's' as the parameter and pass s_name="s"
+    
+    # ---------- Family 0 ----------
+    expr0_x = -360.982 * (0.589 - sp.tanh(s)) * sp.tanh(s)
+    expr0_y = 57.471 * s * sp.sin(sp.exp(s))
+    expr0_z = 1.234 * sp.exp(sp.exp(sp.sin(8.9 * sp.sqrt(sp.exp(-s)))))
 
-    s_plot = np.linspace(s_all.min(), s_all.max(), 500)
-    x_pred = fx(s_plot)
-    y_pred = fy(s_plot)
-    z_pred = fz(s_plot)
+    # ---------- Family 1 ----------
+    expr1_x = -151.324 * (0.888 - sp.tanh(s)) * sp.tanh(s)
+    expr1_y = -54.3 * s * sp.tanh(s + s) + 0.828
+    expr1_z = (-57.035 * s - 85.784) * sp.tanh(s)
 
-    fig, axes = plt.subplots(3, 1, figsize=(9, 10), sharex=True)
+    # ---------- Family 2 ----------
+    expr2_x = -370.298 * (0.689 - sp.tanh(s)) * sp.tanh(s)
+    expr2_y = 40.612 * s * sp.cos(6.177 * s) + 6.676
+    expr2_z = -28.139 * s * sp.exp(sp.sin(11.717 * sp.sqrt(s)))
 
-    # x(s)
-    axes[0].scatter(s_all, x_all, s=10, alpha=0.6, label="Data")
-    axes[0].plot(s_plot, x_pred, linewidth=2,
-                 label=fr"Fit: $R^2={r2_x:.3f}$" + "\n" + eq_x)
-    axes[0].set_ylabel("$x$")
-    axes[0].legend(fontsize=8)
+    # ---------- Family 3 ----------
+    expr3_x = -sp.sinh(2.394 * s + 1.852)
+    expr3_y = 22.687 * sp.exp(sp.sin(s + sp.sin(s))) - 19.796
+    expr3_z = (33.104 - 36.305 * s) * sp.tanh(s)
 
-    # y(s)
-    axes[1].scatter(s_all, y_all, s=10, alpha=0.6, label="Data")
-    axes[1].plot(s_plot, y_pred, linewidth=2,
-                 label=fr"Fit: $R^2={r2_y:.3f}$" + "\n" + eq_y)
-    axes[1].set_ylabel("$y$")
-    axes[1].legend(fontsize=8)
+    # ---------- Family 4 ----------
+    expr4_x = 4.877 * sp.sinh(sp.sin(s + sp.exp(s) + 5.836))
+    expr4_y = 48.752 * s * sp.tanh(s + s) + 7.586
+    expr4_z = -8.01 * sp.sin(sp.sin(2.691 * s)) - 1.697
 
-    # z(s)
-    axes[2].scatter(s_all, z_all, s=10, alpha=0.6, label="Data")
-    axes[2].plot(s_plot, z_pred, linewidth=2,
-                 label=fr"Fit: $R^2={r2_z:.3f}$" + "\n" + eq_z)
-    axes[2].set_ylabel("$z$")
-    axes[2].set_xlabel("$s$")
-    axes[2].legend(fontsize=8)
+    # Build parametric templates (replace floats with a0, a1, ...)
+    first_run_x_templates = [
+        make_parametric_template(expr0_x, s_name="s"),
+        make_parametric_template(expr1_x, s_name="s"),
+        make_parametric_template(expr2_x, s_name="s"),
+        make_parametric_template(expr3_x, s_name="s"),
+        make_parametric_template(expr4_x, s_name="s"),
+    ]
 
-    plt.tight_layout()
-    plt.savefig(f"../pdfs/SR_track_{f_all}.pdf")
-    system(f"open ../pdfs/SR_track_{f_all}.pdf") if OPEN else None
+    first_run_y_templates = [
+        make_parametric_template(expr0_y, s_name="s"),
+        make_parametric_template(expr1_y, s_name="s"),
+        make_parametric_template(expr2_y, s_name="s"),
+        make_parametric_template(expr3_y, s_name="s"),
+        make_parametric_template(expr4_y, s_name="s"),
+    ]
 
-# Build explicit LaTeX equations per 3D family
-def latex_equations_for_3d_families(triple_id_map,
-                                    families_x, families_y, families_z,
-                                    x_eqns, y_eqns, z_eqns):
-    # Invert triple_id_map: family_id -> triple
-    family_to_triple = {fid: triple for triple, fid in triple_id_map.items()}
+    first_run_z_templates = [
+        make_parametric_template(expr0_z, s_name="s"),
+        make_parametric_template(expr1_z, s_name="s"),
+        make_parametric_template(expr2_z, s_name="s"),
+        make_parametric_template(expr3_z, s_name="s"),
+        make_parametric_template(expr4_z, s_name="s"),
+    ]
 
-    # For each family, pick the first track that belongs to it as representative
-    family_to_rep_idx = {}
-    for i, triple in enumerate(zip(families_x, families_y, families_z)):
-        fid = triple_id_map[triple]
-        if fid not in family_to_rep_idx:
-            family_to_rep_idx[fid] = i
+    x_templates.extend(first_run_x_templates)
+    y_templates.extend(first_run_y_templates)
+    z_templates.extend(first_run_z_templates)
 
-    # Build LaTeX align* block
-    lines = []
-    lines.append(r"\begin{align*}")
-    for fid in sorted(family_to_rep_idx.keys()):
-        i = family_to_rep_idx[fid]
+    # ----- Family 0 -----
+    expr0_x = 2.628 - 37.513*sp.sin(4.603*s)
+    expr0_y = 22.332*sp.exp(sp.sin(2.207*s)) - 24.108
+    expr0_z = 7.739*sp.exp(sp.sin(5.757*s)) - 1.917
 
-        eqx = sympy_to_latex_with_s(x_eqns[i])
-        eqy = sympy_to_latex_with_s(y_eqns[i])
-        eqz = sympy_to_latex_with_s(z_eqns[i])
+    # ----- Family 1 -----
+    expr1_x = -23.895*sp.sin(2.88*s) - 6.149
+    expr1_y = 53.5 - 49.255*sp.exp(sp.sin(0.846*s))
+    expr1_z = -109.225*s*sp.cos(sp.sin(s) - 0.721)
 
-        lines.append(fr"\text{{Family }} {fid}: &\ x(s) = {eqx}, \\")
-        lines.append(fr"                 &\ y(s) = {eqy}, \\")
-        lines.append(fr"                 &\ z(s) = {eqz} \\[0.5em]")
-    lines.append(r"\end{align*}")
+    # ----- Family 2 -----
+    expr2_x = 3.977*sp.sin(3.74*s) + 1.945
+    expr2_y = 32.506*sp.exp(sp.sin(1.173*s)) - 29.209
+    expr2_z = s*(19.851*s - 23.241) - 1.718
 
-    return "\n".join(lines)
+    # ----- Family 3 -----
+    expr3_x = -39.697*sp.sin(3.83*s) - 3.123
+    expr3_y = 17.313 - 31.212*sp.sin(9.241*sp.cos(s))
+    expr3_z = -23.95*s*sp.exp(-sp.sin(9.372*s))
 
-print("\n"*10)
+    # ----- Family 4 -----
+    expr4_x = -sp.exp(3.494*s) - 3.929
+    expr4_y = 22.84*sp.exp(sp.sin(1.954*s)) - 19.851
+    expr4_z = 45.462*s*sp.cos(sp.sin(s) + 13.347)
 
-latex_3d_table, triple_id_map = summarize_3d_families(
-    families_x, families_y, families_z,
-    r2_x_all, r2_y_all, r2_z_all
-)
-latex_3d_eqns = latex_equations_for_3d_families(
-    triple_id_map,
-    families_x, families_y, families_z,
-    x_eqns, y_eqns, z_eqns,
-)
+    # Build parametric templates (replace floats by a0, a1, ...)
+    second_run_x_templates = [
+        make_parametric_template(expr0_x, s_name="s"),
+        make_parametric_template(expr1_x, s_name="s"),
+        make_parametric_template(expr2_x, s_name="s"),
+        make_parametric_template(expr3_x, s_name="s"),
+        make_parametric_template(expr4_x, s_name="s"),
+    ]
+
+    second_run_y_templates = [
+        make_parametric_template(expr0_y, s_name="s"),
+        make_parametric_template(expr1_y, s_name="s"),
+        make_parametric_template(expr2_y, s_name="s"),
+        make_parametric_template(expr3_y, s_name="s"),
+        make_parametric_template(expr4_y, s_name="s"),
+    ]
+
+    second_run_z_templates = [
+        make_parametric_template(expr0_z, s_name="s"),
+        make_parametric_template(expr1_z, s_name="s"),
+        make_parametric_template(expr2_z, s_name="s"),
+        make_parametric_template(expr3_z, s_name="s"),
+        make_parametric_template(expr4_z, s_name="s"),
+    ]
+    
+    x_templates.extend(second_run_x_templates)
+    y_templates.extend(second_run_y_templates)
+    z_templates.extend(second_run_z_templates)
+
+    x_eqns, y_eqns, z_eqns = [], [], []   # store final numeric expressions used
+    families_x, families_y, families_z = [], [], []  # indices of template used
+    r2_x_all, r2_y_all, r2_z_all = [], [], [] # R^2 values for each track and coordinate
+
+    track_folder = "../tracks_for_ed"
+    S, X, Y, Z, F = load_many_tracks(track_folder, max_tracks=5)
+
+    model_kwargs = dict(
+        niterations=100,
+        binary_operators=["+", "-", "*", "/", "^"],
+        unary_operators=["sin", "cos", "exp", "tanh", "sqrt", "log", "sech(x) = 1/cosh(x)"],
+        extra_sympy_mappings={"sech": lambda x: 1/sp.cosh(x)},
+        maxsize=9,
+        model_selection="accuracy",
+        elementwise_loss="loss(x, y) = (x - y)^2",
+        random_state=0,
+        deterministic=True,
+        procs=0,
+        multithreading=False,
+        delete_tempfiles=True,
+        warm_start=True
+    )
+    from pysr import PySRRegressor
+    R2_THRESHOLD = 0.95
+
+    for track_idx, (s_all, x_all, y_all, z_all, f_all) in enumerate(zip(S, X, Y, Z, F)):
+        s_all_reshaped = s_all.reshape(-1, 1)
+
+        # --- Helper inner function to handle one coordinate --- #
+        def fit_dimension(
+            s_data, y_data, templates, eqn_list, families_list, coord_name
+        ):
+            print(f"\n--- Fitting Track {track_idx}, coordinate {coord_name} ---")
+            
+            best_R2 = -np.inf
+            best_expr = None
+            best_template_index = None
+
+            # 1) Try existing templates
+            if templates:
+                for idx, template in enumerate(templates):
+                    R2, p_opt, expr_fitted = fit_template_to_data(template, s_data, y_data)
+                    if R2 > best_R2:
+                        best_R2 = R2
+                        best_expr = expr_fitted
+                        best_template_index = idx
+
+            # 2) If good enough, use best template
+            if templates and best_R2 >= R2_THRESHOLD:
+                print(f"[Track {track_idx} {coord_name}] Used existing template {best_template_index} with R^2={best_R2:.3f}")
+                eqn_list.append(best_expr)
+                families_list.append(best_template_index)
+                return best_expr, best_R2
+
+            # 3) Otherwise, run PySR to discover new form
+            model, R2_final, iters = fit_until_both_conditions(
+                s_data.reshape(-1, 1),
+                y_data,
+                model_kwargs,
+                R2_THRESHOLD,
+                min_iters=100,
+                step=50,
+                max_iters=np.inf,
+            )
+
+            expr = model.sympy()
 
 
+            # Make parametric template from this expression
+            template = make_parametric_template(expr, s_name="x0")
+            templates.append(template)
+            new_template_index = len(templates) - 1
 
-print(latex_3d_table)
-print(latex_3d_eqns)
+            # For consistency, also treat this as "fitted" expression (with its initial parameters)
+            R2_new, _, expr_fitted_new = fit_template_to_data(template, s_data, y_data)
+
+            eqn_list.append(expr_fitted_new)
+            families_list.append(new_template_index)
+
+            return expr_fitted_new, R2_new
+
+        # --- Fit x, y, z this track --- #
+        expr_x, r2_x = fit_dimension(s_all, x_all, x_templates, x_eqns, families_x, "x")
+        expr_y, r2_y = fit_dimension(s_all, y_all, y_templates, y_eqns, families_y, "y")
+        expr_z, r2_z = fit_dimension(s_all, z_all, z_templates, z_eqns, families_z, "z")
+        
+        # Store R^2 values for summaries
+        r2_x_all.append(r2_x)
+        r2_y_all.append(r2_y)
+        r2_z_all.append(r2_z)
+
+        # LaTeX strings
+        eq_x = r"$x(s) = " + sympy_to_latex_with_s(expr_x) + "$"
+        eq_y = r"$y(s) = " + sympy_to_latex_with_s(expr_y) + "$"
+        eq_z = r"$z(s) = " + sympy_to_latex_with_s(expr_z) + "$"
+
+        # Plotting using the fitted expressions
+        # (build numpy callables from expr_x, expr_y, expr_z)
+        # Helper: build a numpy-callable from an expression with exactly one free symbol
+        def expr_to_callable(expr):
+            free_syms = list(expr.free_symbols)
+            if len(free_syms) != 1:
+                raise ValueError(f"Expected exactly 1 free symbol in expression, got {free_syms}")
+            s_sym = free_syms[0]
+            return sp.lambdify(s_sym, expr, "numpy")
+
+        fx = expr_to_callable(expr_x)
+        fy = expr_to_callable(expr_y)
+        fz = expr_to_callable(expr_z)
+
+        s_plot = np.linspace(s_all.min(), s_all.max(), 500)
+        x_pred = fx(s_plot)
+        y_pred = fy(s_plot)
+        z_pred = fz(s_plot)
+
+        fig, axes = plt.subplots(3, 1, figsize=(9, 10), sharex=True)
+
+        # x(s)
+        axes[0].scatter(s_all, x_all, s=10, alpha=0.6, label="Data")
+        axes[0].plot(s_plot, x_pred, linewidth=2,
+                     label=fr"Fit: $R^2={r2_x:.3f}$" + "\n" + eq_x)
+        axes[0].set_ylabel("$x$")
+        axes[0].legend(fontsize=8)
+
+        # y(s)
+        axes[1].scatter(s_all, y_all, s=10, alpha=0.6, label="Data")
+        axes[1].plot(s_plot, y_pred, linewidth=2,
+                     label=fr"Fit: $R^2={r2_y:.3f}$" + "\n" + eq_y)
+        axes[1].set_ylabel("$y$")
+        axes[1].legend(fontsize=8)
+
+        # z(s)
+        axes[2].scatter(s_all, z_all, s=10, alpha=0.6, label="Data")
+        axes[2].plot(s_plot, z_pred, linewidth=2,
+                     label=fr"Fit: $R^2={r2_z:.3f}$" + "\n" + eq_z)
+        axes[2].set_ylabel("$z$")
+        axes[2].set_xlabel("$s$")
+        axes[2].legend(fontsize=8)
+
+        plt.tight_layout()
+        plt.savefig(f"../pdfs/SR_track_{f_all}.pdf")
+        system(f"open ../pdfs/SR_track_{f_all}.pdf") if OPEN else None
+
+    # Build explicit LaTeX equations per 3D family
+    def latex_equations_for_3d_families(triple_id_map,
+                                        families_x, families_y, families_z,
+                                        x_eqns, y_eqns, z_eqns):
+        # Invert triple_id_map: family_id -> triple
+        family_to_triple = {fid: triple for triple, fid in triple_id_map.items()}
+
+        # For each family, pick the first track that belongs to it as representative
+        family_to_rep_idx = {}
+        for i, triple in enumerate(zip(families_x, families_y, families_z)):
+            fid = triple_id_map[triple]
+            if fid not in family_to_rep_idx:
+                family_to_rep_idx[fid] = i
+
+        # Build LaTeX align* block
+        lines = []
+        lines.append(r"\begin{align*}")
+        for fid in sorted(family_to_rep_idx.keys()):
+            i = family_to_rep_idx[fid]
+
+            eqx = sympy_to_latex_with_s(x_eqns[i])
+            eqy = sympy_to_latex_with_s(y_eqns[i])
+            eqz = sympy_to_latex_with_s(z_eqns[i])
+
+            lines.append(fr"\text{{Family }} {fid}: &\ x(s) = {eqx}, \\")
+            lines.append(fr"                 &\ y(s) = {eqy}, \\")
+            lines.append(fr"                 &\ z(s) = {eqz} \\[0.5em]")
+        lines.append(r"\end{align*}")
+
+        return "\n".join(lines)
+
+    print("\n"*10)
+
+    latex_3d_table, triple_id_map = summarize_3d_families(
+        families_x, families_y, families_z,
+        r2_x_all, r2_y_all, r2_z_all
+    )
+    latex_3d_eqns = latex_equations_for_3d_families(
+        triple_id_map,
+        families_x, families_y, families_z,
+        x_eqns, y_eqns, z_eqns,
+    )
+
+    print(latex_3d_table)
+    print(latex_3d_eqns)
+    
+
+    save_obj = {
+        "x_templates": x_templates,
+        "y_templates": y_templates,
+        "z_templates": z_templates,
+    }
+
+    with open("track_templates.pkl", "wb") as f:
+        pickle.dump(save_obj, f)
+
