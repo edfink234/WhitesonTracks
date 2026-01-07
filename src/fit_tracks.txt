@@ -90,7 +90,6 @@ def fit_until_both_conditions(s, y, model_kwargs, R2_THRESHOLD, min_iters=100, s
         # Compute R^2
         R2 = model.score(s, y)
         if R2 > best_R2:
-            best_R2 = R2
             print(f"New best R2 = {R2:.3f}")
 
         # --- stopping conditions ---
@@ -113,7 +112,7 @@ def fit_until_both_conditions(s, y, model_kwargs, R2_THRESHOLD, min_iters=100, s
             break
 
     system("rm *hall_of_fame*")
-    return model, best_R2, total_iters
+    return model, R2, total_iters
 
 def sympy_to_latex_with_s(expr):
     """Return a LaTeX string with rounded floats and x0→s replacement."""
@@ -588,21 +587,12 @@ if __name__ == '__main__':
             new_template_index = len(templates) - 1
 
             metrics_new, _, expr_fitted_new, _ = fit_template_to_data(template, s_data, y_data, sigma=sigma)
-            
-            # If templates existed and one of them was better, keep it instead of PySR
-            if best_metrics is not None and best_metrics["R2"] >= metrics_new["R2"]:
-                # Optional: DON'T add this weak PySR template to the library
-                templates.pop()  # remove the appended PySR template
-                print(f"[Track {track_idx} {coord_name}] PySR R^2={metrics_new['R2']:.3f} "
-                      f"but best template R^2={best_metrics['R2']:.3f}; keeping template {best_template_index}.")
-                eqn_list.append(best_expr)
-                families_list.append(best_template_index)
-                return best_expr, best_metrics
 
-            # Otherwise accept PySR
             eqn_list.append(expr_fitted_new)
             families_list.append(new_template_index)
+
             return expr_fitted_new, metrics_new
+
 
         # --- Fit x, y, z this track --- #
         expr_x, m_x = fit_dimension(s_all, x_all, x_templates, x_eqns, families_x, "x")
