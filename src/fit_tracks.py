@@ -12,6 +12,10 @@ from os import system
 round_floats = lambda expr, ndigits: expr.xreplace({f: sp.Float(round(float(f), ndigits)) for f in expr.atoms(sp.Float)})
 sech = lambda x: 1/np.cosh(x)
 
+def sci_to_latex(sci_str):
+    coeff, exp = sci_str.lower().split('e')
+    return rf"{coeff} \times 10^{{{int(exp)}}}"
+
 def regression_metrics(y_true, y_pred, *, sigma=None, ddof=0, eps=1e-12):
     """
     Returns dict with R2, MSE, MAE, chi2, chi2_red.
@@ -186,19 +190,33 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None):
 
     # Build f(s, *a)
     f = sp.lambdify((s_sym, *param_syms), expr_param, "numpy")
-
+    
+    BIG = 1e6  # penalty magnitude for invalid parameter regions
+    
     def residuals(p):
-        y_pred = f(s_data, *p)
-        r = y_pred - y_data
+        with np.errstate(all="ignore"):
+            y_pred = f(s_data, *p)
+
+        # Force finite residuals even if model blows up
+        if (not np.all(np.isfinite(y_pred))) or np.any(np.iscomplex(y_pred)):
+            return np.full_like(y_data, BIG, dtype=float)
+
+        r = (y_pred - y_data).astype(float)
+
         if sigma is not None:
             sig = np.asarray(sigma).ravel()
             if sig.shape != y_data.shape:
                 raise ValueError(f"sigma shape {sig.shape} must match y shape {y_data.shape}")
             r = r / sig
+
+        # Guard against sigma producing inf/nan too
+        if not np.all(np.isfinite(r)):
+            return np.full_like(y_data, BIG, dtype=float)
+
         return r
-        
-    # Nonlinear least squares
-    res = least_squares(residuals, p0)
+
+    # Nonlinear least squares (robust loss helps too)
+    res = least_squares(residuals, p0, loss="soft_l1")
 
     p_opt = res.x
     y_pred = f(s_data, *p_opt)
@@ -339,9 +357,15 @@ if __name__ == '__main__':
     # Fix random seed
     np.random.seed(0)
     np.sech = lambda x: 1/np.cosh(x)
-    OPEN = True
+    OPEN = False
     create_dataset = False
     TEMPLATE_PATH = "track_templates.pkl"
+    track_folder = "../tracks_for_ed"
+    R2_THRESHOLD = 0.997
+    MaxPySRIters = 100
+
+    num_tracks = 100
+    
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
     
@@ -471,15 +495,16 @@ if __name__ == '__main__':
         y_templates.extend(second_run_y_templates)
         z_templates.extend(second_run_z_templates)
         
-        z_templates.append(make_parametric_template(32.963733*(sp.sech(11.1828053185422*s - 2.15648099482236) - 0.629287)/2.007435**sp.cos(7.43865*s), s_name="s"))
+        
+        
+        
+        z_templates.append(make_parametric_template((((((0.508292 ** (-5.130599 + sp.cos((s * 7.306336)))) * (-0.622545 + sp.sech((-2.263896 - (-11.663861 * s))))) + sp.cos((4 ** (2.492631 - s)))) + ((0.987333 + s) ** -72.499292)) + sp.cos((sp.sin(s) / sp.exp(-3.515159)))), s_name="s"))
 #        z_templates.append(make_parametric_template(-34.520199*sp.sech(s**(-1.45342) - 3.00504026595319), s_name="s"))
-
+    track_infos = []  # store per-track info for HTML
     x_eqns, y_eqns, z_eqns = [], [], []   # store final numeric expressions used
     families_x, families_y, families_z = [], [], []  # indices of template used
     r2_x_all, r2_y_all, r2_z_all = [], [], [] # R^2 values for each track and coordinate
 
-    track_folder = "../tracks_for_ed"
-    num_tracks = 5
     S, X, Y, Z, F = load_many_tracks(track_folder, max_tracks=num_tracks)
     assert((len(S), len(X), len(Y), len(Z), len(F)) == (num_tracks, num_tracks, num_tracks, num_tracks, num_tracks))
 #    print(f"len(S), len(X), len(Y), len(Z), len(F) = {(len(S), len(X), len(Y), len(Z), len(F))}")
@@ -516,8 +541,8 @@ if __name__ == '__main__':
         file_path = ""
 #        plot_func = lambda x0: (-34.520199 * np.sech((np.sqrt(9.030267) - (x0 ** -1.453420))))
 #        plot_func_eqn = r"$z(s) = - 34.52 \operatorname{sech}{\left(s^{-1.45} - 3.01 \right)}$"
-        plot_func = lambda x0: (1.063081 + (np.cos((12.904707 * x0)) / -(0.231952))) + (-34.520199 * np.sech((np.sqrt(9.030267) - (x0 ** -1.453420))))
-        plot_func_eqn = r"$z(s) = 1.06 - 4.31 \cos{\left(12.9 s \right)} + - 34.52 \operatorname{sech}{\left(s^{-1.45} - 3.01 \right)}$"
+        plot_func = lambda s: (((((0.508292 ** (-5.130599 + np.cos((s * 7.306336)))) * (-0.622545 + np.sech((-2.263896 - (-11.663861 * s))))) + np.cos((4 ** (2.492631 - s)))) + ((0.987333 + s) ** -72.499292)) + np.cos((np.sin(s) / np.exp(-3.515159))))
+        plot_func_eqn = r"$z(s) = {0.51}^{\cos{\left(7.31 s \right)} - 5.13} \left(\operatorname{sech}{\left(11.66 s - 2.26 \right)} - 0.62\right) + \left(s + 0.99\right)^{-72.5} + \cos{\left(4^{2.49 - s} \right)} + \cos{\left(33.62 \sin{\left(s \right)} \right)}$"
         create_stubborn_track_dataset(S[2], Z[2], file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn)
         
 
@@ -537,7 +562,6 @@ if __name__ == '__main__':
         warm_start=True
     )
     from pysr import PySRRegressor
-    R2_THRESHOLD = 0.95
 
     for track_idx, (s_all, x_all, y_all, z_all, f_all) in enumerate(zip(S, X, Y, Z, F)):
         s_all_reshaped = s_all.reshape(-1, 1)
@@ -553,7 +577,13 @@ if __name__ == '__main__':
             # 1) Try existing templates
             if templates:
                 for idx, template in enumerate(templates):
-                    metrics, p_opt, expr_fitted, _ = fit_template_to_data(template, s_data, y_data, sigma=sigma)
+                    try:
+                        metrics, p_opt, expr_fitted, _ = fit_template_to_data(template, s_data, y_data, sigma=sigma)
+                    except ValueError as e:
+                        # Often: "array must not contain infs or NaNs" from pathological templates
+                        print(f"[Track {track_idx} {coord_name}] Skipping template {idx} due to ValueError: {e}")
+                        continue
+
                     if (best_metrics is None) or (metrics["R2"] > best_metrics["R2"]):
                         best_metrics = metrics
                         best_expr = expr_fitted
@@ -578,7 +608,7 @@ if __name__ == '__main__':
                 R2_THRESHOLD,
                 min_iters=100,
                 step=50,
-                max_iters=np.inf,
+                max_iters=MaxPySRIters,
             )
 
             expr = model.sympy()
@@ -591,7 +621,7 @@ if __name__ == '__main__':
             
             # If templates existed and one of them was better, keep it instead of PySR
             if best_metrics is not None and best_metrics["R2"] >= metrics_new["R2"]:
-                # Optional: DON'T add this weak PySR template to the library
+                # DON'T add this weak PySR template to the library
                 templates.pop()  # remove the appended PySR template
                 print(f"[Track {track_idx} {coord_name}] PySR R^2={metrics_new['R2']:.3f} "
                       f"but best template R^2={best_metrics['R2']:.3f}; keeping template {best_template_index}.")
@@ -677,6 +707,20 @@ if __name__ == '__main__':
         plt.tight_layout()
         plt.savefig(f"../pngs/SR_track_{f_all}.png", dpi=5*96)
         system(f"open ../pngs/SR_track_{f_all}.png") if OPEN else None
+        
+        png_rel = f"../pngs/SR_track_{f_all}.png"  # matches your save path
+
+        track_infos.append({
+            "track_idx": track_idx,
+            "event_id": str(f_all),
+            "png": png_rel,
+            "Fx": families_x[-1],
+            "Fy": families_y[-1],
+            "Fz": families_z[-1],
+            "mx": m_x, "my": m_y, "mz": m_z,
+            "eqx": eq_x, "eqy": eq_y, "eqz": eq_z,
+        })
+
 
     # Build explicit LaTeX equations per 3D family
     def latex_equations_for_3d_families(triple_id_map,
@@ -724,7 +768,6 @@ if __name__ == '__main__':
     print(latex_3d_table)
     print(latex_3d_eqns)
     
-
     save_obj = {
         "x_templates": x_templates,
         "y_templates": y_templates,
@@ -735,4 +778,141 @@ if __name__ == '__main__':
         pickle.dump(save_obj, f)
 
 
+    # -----------------------------
+    # HTML report (minimal)
+    # -----------------------------
+    def html_escape(s: str) -> str:
+        return (s.replace("&", "&amp;")
+                 .replace("<", "&lt;")
+                 .replace(">", "&gt;"))
+
+    # Group tracks by 3D family id
+    fam_to_tracks = defaultdict(list)
+    for info in track_infos:
+        triple = (info["Fx"], info["Fy"], info["Fz"])
+        fid = triple_id_map[triple]
+        info["fid"] = fid
+        fam_to_tracks[fid].append(info)
+
+    # Sort tracks in each family (optional)
+    for fid in fam_to_tracks:
+        fam_to_tracks[fid].sort(key=lambda d: d["track_idx"])
+
+    html_parts = []
+    html_parts.append(r"""<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
+        <title>Track Fit Report</title>
+
+        <!-- MathJax for LaTeX rendering -->
+        <script>
+            window.MathJax = {
+                tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] },
+                chtml: {
+                    // Use MathJax's TeX font (Computer Modern-like), not system fonts
+                    fontURL: "https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/tex"
+                }
+            };
+        </script>
+        <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+        <style>
+            body, h1, summary, .meta, .mono {
+                font-family: "Latin Modern Roman", "Computer Modern", "CMU Serif", serif;
+            }
+            summary {
+                line-height: 2;
+            }
+            summary mjx-container {
+              display: inline-block;
+              vertical-align: middle;
+            }
+
+            body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+            h1 { margin-bottom: 8px; }
+            .subtle { color: #555; margin-top: 0; }
+            details { border: 1px solid #ddd; border-radius: 10px; padding: 10px 12px; margin: 14px 0; }
+            summary { cursor: pointer; font-weight: 700; }
+            .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-top: 12px; }
+            .card { border: 1px solid #eee; border-radius: 12px; padding: 10px; background: #fff; }
+            .card img { width: 100%; height: auto; border-radius: 10px; border: 1px solid #eee; }
+            .meta { font-size: 13px; color: #444; margin: 8px 0 0; }
+            .eq { font-size: 13px; margin-top: 8px; }
+            .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
+        </style>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/latin-modern-roman/index.css">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/latin-modern-math/index.css">
+    </head>
+<body>
+<h1>Track Fit Report</h1>
+<p class="subtle">Grouped by 3D family id \(F_x, F_y, F_z\).</p>
+""")
+
+    for fid in sorted(fam_to_tracks.keys()):
+        tracks = fam_to_tracks[fid]
+        Fx, Fy, Fz = tracks[0]["Fx"], tracks[0]["Fy"], tracks[0]["Fz"]
+
+        html_parts.append(f"""
+<details open>
+  <summary>Family {fid} &nbsp; <span class="mono">($F_x={Fx}$, $F_y={Fy}$, $F_z={Fz}$)</span>
+  &nbsp; — {len(tracks)} track(s)</summary><br>
+  <div class="grid">
+""")
+
+        for t in tracks:
+            mx, my, mz = t["mx"], t["my"], t["mz"]
+
+            # Equations are already like: "$x(s)=...$"
+            eq_block = "<br/>".join([
+                t["eqx"],
+                t["eqy"],
+                t["eqz"],
+            ])
+            
+            chi_x = sci_to_latex(f"{mx['chi2_red']:.3e}")
+            chi_y = sci_to_latex(f"{my['chi2_red']:.3e}")
+            chi_z = sci_to_latex(f"{mz['chi2_red']:.3e}")
+
+            metrics_line = (
+                r"\begin{align*}"
+                rf"&R^2:\, x={mx['R2']:.3f},\;"
+                rf"y={my['R2']:.3f},\;"
+                rf"z={mz['R2']:.3f}"
+                rf"\\"
+                rf"&\chi^2_\nu:\;"
+                r"\mathrm{x}="f"{chi_x},\;"
+                r"\mathrm{y}="f"{chi_y},\;"
+                r"\mathrm{z}="f"{chi_z}"
+                r"\end{align*}"
+            )
+
+
+            html_parts.append(f"""
+    <div class="card">
+      <div class="meta"><b>Track {t['track_idx']+1}</b> ({html_escape(t['event_id'])})</div>
+      <div class="meta">{html_escape(metrics_line)}</div><br>
+      <a href="{html_escape(t['png'])}" target="_blank" rel="noopener">
+        <img src="{html_escape(t['png'])}" alt="Track {t['track_idx']} plot"/>
+      </a>
+      <div class="eq">{eq_block}</div>
+    </div>
+""")
+
+        html_parts.append("""
+  </div>
+</details>
+""")
+
+    html_parts.append("""
+</body>
+</html>
+""")
+
+    out_html = "results.html"
+    with open(out_html, "w", encoding="utf-8") as f:
+        f.write("".join(html_parts))
+
+    print(f"[HTML] Wrote report to: {out_html}")
 
