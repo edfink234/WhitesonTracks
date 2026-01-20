@@ -8,6 +8,7 @@ from collections import defaultdict
 import pickle
 import os
 from os import system
+import json
 
 round_floats = lambda expr, ndigits: expr.xreplace({f: sp.Float(round(float(f), ndigits)) for f in expr.atoms(sp.Float)})
 sech = lambda x: 1/np.cosh(x)
@@ -357,14 +358,15 @@ if __name__ == '__main__':
     # Fix random seed
     np.random.seed(0)
     np.sech = lambda x: 1/np.cosh(x)
-    OPEN = False
+    OPEN_PNGS = False
+    OPEN_HTML = True
     create_dataset = False
     TEMPLATE_PATH = "track_templates.pkl"
     track_folder = "../tracks_for_ed"
     R2_THRESHOLD = 0.997
+    RunPySR = False   # <-- set False to disable PySR discovery entirely
     MaxPySRIters = 100
-
-    num_tracks = 100
+    num_tracks = 5
     
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
@@ -599,6 +601,17 @@ if __name__ == '__main__':
 
             # 3) Otherwise, run PySR to discover new form
             best_R2 = -np.inf if best_metrics is None else best_metrics["R2"]
+            if not RunPySR:
+                print(f"[Track {track_idx} {coord_name}] best_R2={best_R2:.3f} < {R2_THRESHOLD} "
+                      f"but RunPySR=False, so skipping PySR and using best available template.")
+                if best_expr is None:
+                    raise RuntimeError(
+                        f"No templates available (or all failed) for Track {track_idx} {coord_name}, "
+                        f"and RunPySR=False. Can't produce a fit."
+                    )
+                eqn_list.append(best_expr)
+                families_list.append(best_template_index)
+                return best_expr, best_metrics
             print(f"best_R2 of {best_R2} is less than {R2_THRESHOLD}, running PYSR now.")
 
             model, R2_final, iters = fit_until_both_conditions(
@@ -621,7 +634,6 @@ if __name__ == '__main__':
             
             # If templates existed and one of them was better, keep it instead of PySR
             if best_metrics is not None and best_metrics["R2"] >= metrics_new["R2"]:
-                # DON'T add this weak PySR template to the library
                 templates.pop()  # remove the appended PySR template
                 print(f"[Track {track_idx} {coord_name}] PySR R^2={metrics_new['R2']:.3f} "
                       f"but best template R^2={best_metrics['R2']:.3f}; keeping template {best_template_index}.")
@@ -706,7 +718,7 @@ if __name__ == '__main__':
 
         plt.tight_layout()
         plt.savefig(f"../pngs/SR_track_{f_all}.png", dpi=5*96)
-        system(f"open ../pngs/SR_track_{f_all}.png") if OPEN else None
+        system(f"open ../pngs/SR_track_{f_all}.png") if OPEN_PNGS else None
         
         png_rel = f"../pngs/SR_track_{f_all}.png"  # matches your save path
 
@@ -801,69 +813,187 @@ if __name__ == '__main__':
     html_parts = []
     html_parts.append(r"""<!doctype html>
 <html>
-    <head>
-        <meta charset="utf-8"/>
-        <meta name="viewport" content="width=device-width, initial-scale=1"/>
-        <title>Track Fit Report</title>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Track Fit Report (Scroller)</title>
 
-        <!-- MathJax for LaTeX rendering -->
-        <script>
-            window.MathJax = {
-                tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] },
-                chtml: {
-                    // Use MathJax's TeX font (Computer Modern-like), not system fonts
-                    fontURL: "https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/tex"
-                }
-            };
-        </script>
-        <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <!-- MathJax for LaTeX rendering -->
+  <script>
+    window.MathJax = {
+      tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] },
+      svg: { fontCache: "global" }   // SVG output; no webfont fetches
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-svg.js"></script>
 
-        <style>
-            body, h1, summary, .meta, .mono {
-                font-family: "Latin Modern Roman", "Computer Modern", "CMU Serif", serif;
-            }
-            summary {
-                line-height: 2;
-            }
-            summary mjx-container {
-              display: inline-block;
-              vertical-align: middle;
-            }
+  <!-- TeX-y text fonts -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/latin-modern-roman/index.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/latin-modern-math/index.css">
 
-            body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-            h1 { margin-bottom: 8px; }
-            .subtle { color: #555; margin-top: 0; }
-            details { border: 1px solid #ddd; border-radius: 10px; padding: 10px 12px; margin: 14px 0; }
-            summary { cursor: pointer; font-weight: 700; }
-            .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-top: 12px; }
-            .card { border: 1px solid #eee; border-radius: 12px; padding: 10px; background: #fff; }
-            .card img { width: 100%; height: auto; border-radius: 10px; border: 1px solid #eee; }
-            .meta { font-size: 13px; color: #444; margin: 8px 0 0; }
-            .eq { font-size: 13px; margin-top: 8px; }
-            .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
-        </style>
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/latin-modern-roman/index.css">
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/latin-modern-math/index.css">
-    </head>
+  <style>
+    body {
+      font-family: "Latin Modern Roman", "Computer Modern", "CMU Serif", serif;
+      margin: 24px;
+      background: #fafafa;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .subtle { color: #555; margin-top: 0; }
+
+    .toolbar {
+      display: flex; align-items: center; gap: 12px;
+      position: sticky; top: 0; background: #fafafa;
+      padding: 12px 0; z-index: 2;
+      border-bottom: 1px solid #eee;
+    }
+    button {
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: 1px solid #ddd;
+      background: #fff;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 14px;
+    }
+    button:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+    .counter { color: #444; font-size: 14px; }
+
+    .card {
+      border-radius: 16px;
+      padding: 16px 20px 20px;
+      background: #fff;
+      max-width: 980px;
+      margin: 0 auto; 
+      box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+      border: 1px solid #eee;
+    }
+    .meta { font-size: 13px; color: #444; margin: 6px 0 0; }
+    .meta b { font-weight: 600; }
+
+    .metrics {
+      text-align: center;
+      margin: 14px 0 8px;
+    }
+    .metrics mjx-container {
+      font-size: 1.05em;
+    }
+
+    .eq {
+      font-size: 14px;
+      margin-top: 14px;
+      text-align: center;
+      line-height: 1.6;
+    }
+    .eq mjx-container {
+      font-size: 1.02em;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+    }
+    img {
+      width: 100%;
+      height: auto;
+      border-radius: 12px;
+      border: 1px solid #eee;
+      margin-top: 10px;
+    }
+  </style>
+</head>
 <body>
-<h1>Track Fit Report</h1>
-<p class="subtle">Grouped by 3D family id \(F_x, F_y, F_z\).</p>
+  <h1>Track Fit Report</h1>
+  <p class="subtle">Use ← / → or the buttons to scroll through tracks (grouped by family).</p>
+
+  <div class="toolbar">
+    <button id="prevBtn">← Prev</button>
+    <button id="nextBtn">Next →</button>
+    <span class="counter" id="counter"></span>
+  </div>
+
+  <div class="card" id="card"></div>
+
+  <script>
+    // Data injected from Python below
+    const slides = __SLIDES_JSON__;
+
+    function escapeHtml(s) {
+      return s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+    }
+
+    function render(i) {
+      const t = slides[i];
+
+      // NOTE: eqx/eqy/eqz are already "$...$" strings.
+      const eqBlock = `${t.eqx}<br/>${t.eqy}<br/>${t.eqz}`;
+
+      const html = `
+        <div class="meta">
+          <b>Family ${t.fid}</b>
+          <span class="mono"> (F_x=${t.Fx}, F_y=${t.Fy}, F_z=${t.Fz})</span>
+        </div>
+        <div class="meta">
+          <b>Track ${t.track_idx + 1}</b> (${escapeHtml(t.event_id)})
+        </div>
+
+        <div class="meta metrics">${t.metrics_line}</div>
+
+        <a href="${escapeHtml(t.png)}" target="_blank" rel="noopener">
+          <img src="${escapeHtml(t.img_src)}" alt="Track ${t.track_idx} plot"/>
+        </a>
+
+        <div class="eq">${eqBlock}</div>
+      `;
+
+      document.getElementById("card").innerHTML = html;
+
+      document.getElementById("counter").textContent =
+        `Item ${i+1} / ${slides.length}`;
+
+      // Re-typeset MathJax after DOM update
+      if (window.MathJax && MathJax.typesetPromise) {
+        MathJax.typesetPromise();
+      }
+    }
+
+    let idx = 0;
+
+    function goTo(newIndex) {
+      // wrap around
+      idx = (newIndex + slides.length) % slides.length;
+      render(idx);
+    }
+
+    document.getElementById("prevBtn").addEventListener("click", () => {
+      goTo(idx - 1);
+    });
+    document.getElementById("nextBtn").addEventListener("click", () => {
+      goTo(idx + 1);
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft")  { goTo(idx - 1); }
+      if (e.key === "ArrowRight") { goTo(idx + 1); }
+    });
+
+    render(idx);
+
+  </script>
+</body>
+</html>
 """)
 
+    slides_payload = []
     for fid in sorted(fam_to_tracks.keys()):
         tracks = fam_to_tracks[fid]
         Fx, Fy, Fz = tracks[0]["Fx"], tracks[0]["Fy"], tracks[0]["Fz"]
-
-        html_parts.append(f"""
-<details open>
-  <summary>Family {fid} &nbsp; <span class="mono">($F_x={Fx}$, $F_y={Fy}$, $F_z={Fz}$)</span>
-  &nbsp; — {len(tracks)} track(s)</summary><br>
-  <div class="grid">
-""")
-
+        
         for t in tracks:
             mx, my, mz = t["mx"], t["my"], t["mz"]
-
             # Equations are already like: "$x(s)=...$"
             eq_block = "<br/>".join([
                 t["eqx"],
@@ -887,32 +1017,26 @@ if __name__ == '__main__':
                 r"\mathrm{z}="f"{chi_z}"
                 r"\end{align*}"
             )
+            
+            slides_payload.append({
+                "fid": t["fid"],
+                "Fx": t["Fx"], "Fy": t["Fy"], "Fz": t["Fz"],
+                "track_idx": t["track_idx"],
+                "event_id": t["event_id"],
+                "png": t["png"].replace("../",""),                       # link target (as you used before)
+                "img_src": t["png"].replace("../",""), # displayed img path (as you used before)
+                "metrics_line": metrics_line,
+                "eqx": t["eqx"], "eqy": t["eqy"], "eqz": t["eqz"],
+            })
+        
+    slides_json = json.dumps(slides_payload)
+    html_text = "".join(html_parts).replace("__SLIDES_JSON__", slides_json)
 
-
-            html_parts.append(f"""
-    <div class="card">
-      <div class="meta"><b>Track {t['track_idx']+1}</b> ({html_escape(t['event_id'])})</div>
-      <div class="meta">{html_escape(metrics_line)}</div><br>
-      <a href="{html_escape(t['png'])}" target="_blank" rel="noopener">
-        <img src="{html_escape(t['png'])}" alt="Track {t['track_idx']} plot"/>
-      </a>
-      <div class="eq">{eq_block}</div>
-    </div>
-""")
-
-        html_parts.append("""
-  </div>
-</details>
-""")
-
-    html_parts.append("""
-</body>
-</html>
-""")
-
-    out_html = "results.html"
+    out_html = "track_results.html"
     with open(out_html, "w", encoding="utf-8") as f:
-        f.write("".join(html_parts))
+        f.write(html_text)
 
     print(f"[HTML] Wrote report to: {out_html}")
-
+    system("mv track_results.html /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/")
+    if OPEN_HTML:
+        system("open /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/track_results.html")
