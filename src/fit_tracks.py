@@ -133,9 +133,15 @@ def sympy_to_latex_with_s(expr):
 
     return expr_latex
 
-def template_to_latex_with_s(template):
-    """Convert a parametric template to LaTeX, replacing x0→s."""
-    expr = template["expr"]  # parametric sympy expression
+def template_to_latex_with_s(template_or_expr):
+    expr = None
+    """Convert a parametric template (dict) or a sympy expr to LaTeX, replacing x0→s."""
+    if isinstance(template_or_expr, dict):
+        expr = template_or_expr["expr"]
+    else:
+        expr = template_or_expr
+
+    import sympy as sp
     expr_latex = sp.latex(expr)
     expr_latex = expr_latex.replace("x_{0}", "s").replace("x0", "s")
     return expr_latex
@@ -366,7 +372,7 @@ if __name__ == '__main__':
     R2_THRESHOLD = 0.997
     RunPySR = False   # <-- set False to disable PySR discovery entirely
     MaxPySRIters = 100
-    num_tracks = 5
+    num_tracks = 100
     
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
@@ -871,6 +877,17 @@ if __name__ == '__main__':
       box-shadow: 0 6px 18px rgba(0,0,0,0.04);
       border: 1px solid #eee;
     }
+    
+    .eqJump {
+      text-decoration: none;
+      border-bottom: 1px dotted #888;
+      color: inherit;
+    }
+    .eqJump:hover {
+      border-bottom-style: solid;
+    }
+
+    
     .meta { font-size: 13px; color: #444; margin: 6px 0 0; }
     .meta b { font-weight: 600; }
 
@@ -920,6 +937,8 @@ if __name__ == '__main__':
   <script>
     // Data injected from Python below
     const slides = __SLIDES_JSON__;
+    const eqSlides = __EQS_JSON__;
+    const eqStats  = __EQ_STATS_JSON__;
 
     function escapeHtml(s) {
       return s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
@@ -932,27 +951,33 @@ if __name__ == '__main__':
       const eqBlock = `${t.eqx}<br/>${t.eqy}<br/>${t.eqz}`;
 
       const html = `
-        <div class="meta">
-          <b>Family ${t.fid}</b>
-          <span class="mono"> (F_x=${t.Fx}, F_y=${t.Fy}, F_z=${t.Fz})</span>
-        </div>
-        <div class="meta">
-          <b>Track ${t.track_idx + 1}</b> (${escapeHtml(t.event_id)})
-        </div>
+      <div class="meta">
+        <b>Family ${t.fid}</b>
+        <span class="mono"> (F_x=${t.Fx}, F_y=${t.Fy}, F_z=${t.Fz})</span>
+      </div>
 
-        <div class="meta metrics">${t.metrics_line}</div>
+      <div id="eqViewer"></div>
 
-        <a href="${escapeHtml(t.png)}" target="_blank" rel="noopener">
-          <img src="${escapeHtml(t.img_src)}" alt="Track ${t.track_idx} plot"/>
-        </a>
+      <div class="meta">
+        <b>Track ${t.track_idx + 1}</b> (${escapeHtml(t.event_id)})
+      </div>
 
-        <div class="eq">${eqBlock}</div>
-      `;
+      <div class="meta metrics">${t.metrics_line}</div>
 
-      document.getElementById("card").innerHTML = html;
+      <a href="${escapeHtml(t.png)}" target="_blank" rel="noopener">
+        <img id="trackImg" src="${escapeHtml(t.img_src)}" alt="Track ${t.track_idx} plot"/>
+      </a>
 
-      document.getElementById("counter").textContent =
+      <div class="eq">${eqBlock}</div>
+    `;
+
+    
+        document.getElementById("card").innerHTML = html;
+
+        document.getElementById("counter").textContent =
         `Item ${i+1} / ${slides.length}`;
+        
+        renderEqViewer();
 
       // Re-typeset MathJax after DOM update
       if (window.MathJax && MathJax.typesetPromise) {
@@ -967,6 +992,75 @@ if __name__ == '__main__':
       idx = (newIndex + slides.length) % slides.length;
       render(idx);
     }
+    
+    // -----------------------
+    // Equation viewer (global)
+    // -----------------------
+    let eqIdx = 0;
+
+    function renderEqViewer() {
+      const container = document.getElementById("eqViewer");
+      if (!container) return;
+
+      const e = eqSlides[eqIdx];
+
+      // build the list of clickable uses
+      const usesHtml = e.uses.map(u =>
+        `<a href="#" class="eqJump" data-slide="${u.slide}">${escapeHtml(u.label)}</a>`
+      ).join(", ");
+
+      container.innerHTML = `
+        <div class="meta" style="margin-top:10px;">
+          <b>${eqStats.unique}</b> unique equation templates used out of
+          <b>${eqStats.total_components}</b> track-components.
+        </div>
+
+        <div style="display:flex; align-items:center; gap:10px; margin-top:10px;">
+          <button id="eqPrev">←</button>
+          <button id="eqNext">→</button>
+          <span class="counter">Equation ${eqIdx + 1} / ${eqSlides.length}</span>
+        </div>
+
+        <div class="eq" style="margin-top:10px;">
+          <div><b>Equation ${eqIdx + 1}:</b></div>
+          <div style="margin-top:6px;">${e.eq}</div>
+          <div class="meta" style="margin-top:10px;">
+            ${usesHtml}
+          </div>
+        </div>
+      `;
+
+      // hook up arrow buttons with wrap
+      document.getElementById("eqPrev").onclick = () => {
+        eqIdx = (eqIdx - 1 + eqSlides.length) % eqSlides.length;
+        renderEqViewer();
+      };
+      document.getElementById("eqNext").onclick = () => {
+        eqIdx = (eqIdx + 1) % eqSlides.length;
+        renderEqViewer();
+      };
+
+      // hook up each jump link
+      for (const a of container.querySelectorAll(".eqJump")) {
+        a.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          const target = parseInt(a.dataset.slide, 10);
+          goTo(target);
+
+          // after the card re-renders, scroll the image into view
+          setTimeout(() => {
+            const img = document.getElementById("trackImg");
+            if (img) img.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 0);
+        });
+      }
+
+      // typeset just-updated math
+      if (window.MathJax && MathJax.typesetPromise) {
+        MathJax.typesetPromise();
+      }
+    }
+
 
     document.getElementById("prevBtn").addEventListener("click", () => {
       goTo(idx - 1);
@@ -988,6 +1082,8 @@ if __name__ == '__main__':
 """)
 
     slides_payload = []
+    eq_map = defaultdict(list)  # eq_string -> list of uses
+    slide_index = 0
     for fid in sorted(fam_to_tracks.keys()):
         tracks = fam_to_tracks[fid]
         Fx, Fy, Fz = tracks[0]["Fx"], tracks[0]["Fy"], tracks[0]["Fz"]
@@ -1018,6 +1114,14 @@ if __name__ == '__main__':
                 r"\end{align*}"
             )
             
+            # --- record equation usage (track number is 1-based for display) ---
+            track_num = t["track_idx"] + 1
+            # use TEMPLATE IDs (family indices), not fitted latex strings
+            eq_map[("x", t["Fx"])].append({"slide": slide_index, "label": f"{track_num}-x"})
+            eq_map[("y", t["Fy"])].append({"slide": slide_index, "label": f"{track_num}-y"})
+            eq_map[("z", t["Fz"])].append({"slide": slide_index, "label": f"{track_num}-z"})
+
+            
             slides_payload.append({
                 "fid": t["fid"],
                 "Fx": t["Fx"], "Fy": t["Fy"], "Fz": t["Fz"],
@@ -1028,10 +1132,52 @@ if __name__ == '__main__':
                 "metrics_line": metrics_line,
                 "eqx": t["eqx"], "eqy": t["eqy"], "eqz": t["eqz"],
             })
-        
-    slides_json = json.dumps(slides_payload)
-    html_text = "".join(html_parts).replace("__SLIDES_JSON__", slides_json)
+            
+            slide_index += 1
+    
+    # Preserve “first equation in template list” ordering:
+    # iterate through slides_payload in order and take first time we see an eq
+    def template_latex_for(coord, fam_idx):
+        # Display the parametric template form (a0, a1, ...) for that family
+        if coord == "x":
+            return r"$x(s) = " + template_to_latex_with_s(x_templates[fam_idx]) + r"$"
+        if coord == "y":
+            return r"$y(s) = " + template_to_latex_with_s(y_templates[fam_idx]) + r"$"
+        if coord == "z":
+            return r"$z(s) = " + template_to_latex_with_s(z_templates[fam_idx]) + r"$"
+        raise ValueError(coord)
 
+    seen = set()
+    eq_slides = []
+
+    # Iterate tracks in the same order as your slides, and “first time we see (coord,fam)”
+    for sp in slides_payload:
+        keys = [("x", sp["Fx"]), ("y", sp["Fy"]), ("z", sp["Fz"])]
+        for key in keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            coord, fam_idx = key
+            eq_slides.append({
+                "key": [coord, fam_idx],
+                "eq": template_latex_for(coord, fam_idx),
+                "uses": eq_map[key],
+            })
+
+    eq_stats = {
+        "unique": len(eq_slides),
+        "total_components": 3 * len(slides_payload),
+    }
+
+    
+    slides_json = json.dumps(slides_payload)
+    eqs_json = json.dumps(eq_slides)
+    stats_json = json.dumps(eq_stats)
+    html_text = "".join(html_parts)
+    html_text = html_text.replace("__SLIDES_JSON__", slides_json)
+    html_text = html_text.replace("__EQS_JSON__", eqs_json)
+    html_text = html_text.replace("__EQ_STATS_JSON__", stats_json)
+    
     out_html = "track_results.html"
     with open(out_html, "w", encoding="utf-8") as f:
         f.write(html_text)

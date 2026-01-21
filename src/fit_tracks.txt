@@ -133,12 +133,17 @@ def sympy_to_latex_with_s(expr):
 
     return expr_latex
 
-def template_to_latex_with_s(template):
-    """Convert a parametric template to LaTeX, replacing x0→s."""
-    expr = template["expr"]  # parametric sympy expression
+def template_to_latex_with_s(template_or_expr):
+    """Convert a parametric template (dict) or a sympy expr to LaTeX, replacing x0→s."""
+    if isinstance(template_or_expr, dict):
+        expr = template_or_expr["expr"]
+    else:
+        expr = template_or_expr
+
     expr_latex = sp.latex(expr)
     expr_latex = expr_latex.replace("x_{0}", "s").replace("x0", "s")
     return expr_latex
+
 
 def make_parametric_template(expr, s_name="x0"):
     """
@@ -358,7 +363,8 @@ if __name__ == '__main__':
     # Fix random seed
     np.random.seed(0)
     np.sech = lambda x: 1/np.cosh(x)
-    OPEN = False
+    OPEN_PNGS = False
+    OPEN_HTML = True
     create_dataset = False
     TEMPLATE_PATH = "track_templates.pkl"
     track_folder = "../tracks_for_ed"
@@ -717,7 +723,7 @@ if __name__ == '__main__':
 
         plt.tight_layout()
         plt.savefig(f"../pngs/SR_track_{f_all}.png", dpi=5*96)
-        system(f"open ../pngs/SR_track_{f_all}.png") if OPEN else None
+        system(f"open ../pngs/SR_track_{f_all}.png") if OPEN_PNGS else None
         
         png_rel = f"../pngs/SR_track_{f_all}.png"  # matches your save path
 
@@ -821,28 +827,98 @@ if __name__ == '__main__':
   <script>
     window.MathJax = {
       tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] },
-      chtml: { fontURL: "https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/tex" }
+      svg: { fontCache: "global" }   // SVG output; no webfont fetches
     };
   </script>
-  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-svg.js"></script>
+
+  <!-- TeX-y text fonts -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/latin-modern-roman/index.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/latin-modern-math/index.css">
 
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-    h1 { margin: 0 0 8px; }
+    body {
+      font-family: "Latin Modern Roman", "Computer Modern", "CMU Serif", serif;
+      margin: 24px;
+      background: #fafafa;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
     .subtle { color: #555; margin-top: 0; }
+
     .toolbar {
-      display: flex; align-items: center; gap: 10px;
-      position: sticky; top: 0; background: white; padding: 12px 0; z-index: 2;
+      display: flex; align-items: center; gap: 12px;
+      position: sticky; top: 0; background: #fafafa;
+      padding: 12px 0; z-index: 2;
       border-bottom: 1px solid #eee;
     }
-    button { padding: 8px 12px; border-radius: 10px; border: 1px solid #ddd; background: #fafafa; cursor: pointer; }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button {
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: 1px solid #ddd;
+      background: #fff;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 14px;
+    }
+    button:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
     .counter { color: #444; font-size: 14px; }
-    .card { border: 1px solid #eee; border-radius: 14px; padding: 12px; background: #fff; max-width: 980px; }
-    .meta { font-size: 13px; color: #444; margin: 8px 0 0; }
-    .eq { font-size: 13px; margin-top: 10px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
-    img { width: 100%; height: auto; border-radius: 12px; border: 1px solid #eee; margin-top: 10px; }
+
+    .card {
+      border-radius: 16px;
+      padding: 16px 20px 20px;
+      background: #fff;
+      max-width: 980px;
+      margin: 0 auto; 
+      box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+      border: 1px solid #eee;
+    }
+    
+    .eqJump {
+      text-decoration: none;
+      border-bottom: 1px dotted #888;
+      color: inherit;
+    }
+    .eqJump:hover {
+      border-bottom-style: solid;
+    }
+
+    
+    .meta { font-size: 13px; color: #444; margin: 6px 0 0; }
+    .meta b { font-weight: 600; }
+
+    .metrics {
+      text-align: center;
+      margin: 14px 0 8px;
+    }
+    .metrics mjx-container {
+      font-size: 1.05em;
+    }
+
+    .eq {
+      font-size: 14px;
+      margin-top: 14px;
+      text-align: center;
+      line-height: 1.6;
+    }
+    .eq mjx-container {
+      font-size: 1.02em;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 12px;
+    }
+    img {
+      width: 100%;
+      height: auto;
+      border-radius: 12px;
+      border: 1px solid #eee;
+      margin-top: 10px;
+    }
   </style>
 </head>
 <body>
@@ -860,6 +936,8 @@ if __name__ == '__main__':
   <script>
     // Data injected from Python below
     const slides = __SLIDES_JSON__;
+    const eqSlides = __EQS_JSON__;
+    const eqStats  = __EQ_STATS_JSON__;
 
     function escapeHtml(s) {
       return s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
@@ -872,30 +950,33 @@ if __name__ == '__main__':
       const eqBlock = `${t.eqx}<br/>${t.eqy}<br/>${t.eqz}`;
 
       const html = `
-        <div class="meta">
-          <b>Family ${t.fid}</b>
-          <span class="mono"> (F_x=${t.Fx}, F_y=${t.Fy}, F_z=${t.Fz})</span>
-        </div>
-        <div class="meta">
-          <b>Track ${t.track_idx + 1}</b> (${escapeHtml(t.event_id)})
-        </div>
+      <div class="meta">
+        <b>Family ${t.fid}</b>
+        <span class="mono"> (F_x=${t.Fx}, F_y=${t.Fy}, F_z=${t.Fz})</span>
+      </div>
 
-        <div class="meta">${escapeHtml(t.metrics_line)}</div>
+      <div id="eqViewer"></div>
 
-        <a href="${escapeHtml(t.png)}" target="_blank" rel="noopener">
-          <img src="${escapeHtml(t.img_src)}" alt="Track ${t.track_idx} plot"/>
-        </a>
+      <div class="meta">
+        <b>Track ${t.track_idx + 1}</b> (${escapeHtml(t.event_id)})
+      </div>
 
-        <div class="eq">${eqBlock}</div>
-      `;
+      <div class="meta metrics">${t.metrics_line}</div>
 
-      document.getElementById("card").innerHTML = html;
+      <a href="${escapeHtml(t.png)}" target="_blank" rel="noopener">
+        <img id="trackImg" src="${escapeHtml(t.img_src)}" alt="Track ${t.track_idx} plot"/>
+      </a>
 
-      document.getElementById("counter").textContent =
+      <div class="eq">${eqBlock}</div>
+    `;
+
+    
+        document.getElementById("card").innerHTML = html;
+
+        document.getElementById("counter").textContent =
         `Item ${i+1} / ${slides.length}`;
-
-      document.getElementById("prevBtn").disabled = (i === 0);
-      document.getElementById("nextBtn").disabled = (i === slides.length - 1);
+        
+        renderEqViewer();
 
       // Re-typeset MathJax after DOM update
       if (window.MathJax && MathJax.typesetPromise) {
@@ -904,21 +985,104 @@ if __name__ == '__main__':
     }
 
     let idx = 0;
-    document.getElementById("prevBtn").addEventListener("click", () => { if (idx > 0) { idx--; render(idx); }});
-    document.getElementById("nextBtn").addEventListener("click", () => { if (idx < slides.length - 1) { idx++; render(idx); }});
+
+    function goTo(newIndex) {
+      // wrap around
+      idx = (newIndex + slides.length) % slides.length;
+      render(idx);
+    }
+    
+    // -----------------------
+    // Equation viewer (global)
+    // -----------------------
+    let eqIdx = 0;
+
+    function renderEqViewer() {
+      const container = document.getElementById("eqViewer");
+      if (!container) return;
+
+      const e = eqSlides[eqIdx];
+
+      // build the list of clickable uses
+      const usesHtml = e.uses.map(u =>
+        `<a href="#" class="eqJump" data-slide="${u.slide}">${escapeHtml(u.label)}</a>`
+      ).join(", ");
+
+      container.innerHTML = `
+        <div class="meta" style="margin-top:10px;">
+          <b>${eqStats.unique}</b> unique equation templates used out of
+          <b>${eqStats.total_components}</b> track-components.
+        </div>
+
+        <div style="display:flex; align-items:center; gap:10px; margin-top:10px;">
+          <button id="eqPrev">←</button>
+          <button id="eqNext">→</button>
+          <span class="counter">Equation ${eqIdx + 1} / ${eqSlides.length}</span>
+        </div>
+
+        <div class="eq" style="margin-top:10px;">
+          <div><b>Equation ${eqIdx + 1}:</b></div>
+          <div style="margin-top:6px;">${e.eq}</div>
+          <div class="meta" style="margin-top:10px;">
+            ${usesHtml}
+          </div>
+        </div>
+      `;
+
+      // hook up arrow buttons with wrap
+      document.getElementById("eqPrev").onclick = () => {
+        eqIdx = (eqIdx - 1 + eqSlides.length) % eqSlides.length;
+        renderEqViewer();
+      };
+      document.getElementById("eqNext").onclick = () => {
+        eqIdx = (eqIdx + 1) % eqSlides.length;
+        renderEqViewer();
+      };
+
+      // hook up each jump link
+      for (const a of container.querySelectorAll(".eqJump")) {
+        a.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          const target = parseInt(a.dataset.slide, 10);
+          goTo(target);
+
+          // after the card re-renders, scroll the image into view
+          setTimeout(() => {
+            const img = document.getElementById("trackImg");
+            if (img) img.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 0);
+        });
+      }
+
+      // typeset just-updated math
+      if (window.MathJax && MathJax.typesetPromise) {
+        MathJax.typesetPromise();
+      }
+    }
+
+
+    document.getElementById("prevBtn").addEventListener("click", () => {
+      goTo(idx - 1);
+    });
+    document.getElementById("nextBtn").addEventListener("click", () => {
+      goTo(idx + 1);
+    });
 
     window.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowLeft")  { if (idx > 0) { idx--; render(idx); } }
-      if (e.key === "ArrowRight") { if (idx < slides.length - 1) { idx++; render(idx); } }
+      if (e.key === "ArrowLeft")  { goTo(idx - 1); }
+      if (e.key === "ArrowRight") { goTo(idx + 1); }
     });
 
     render(idx);
+
   </script>
 </body>
 </html>
 """)
 
     slides_payload = []
+    eq_map = defaultdict(list)  # eq_string -> list of uses
+    slide_index = 0
     for fid in sorted(fam_to_tracks.keys()):
         tracks = fam_to_tracks[fid]
         Fx, Fy, Fz = tracks[0]["Fx"], tracks[0]["Fy"], tracks[0]["Fz"]
@@ -949,23 +1113,75 @@ if __name__ == '__main__':
                 r"\end{align*}"
             )
             
+            # --- record equation usage (track number is 1-based for display) ---
+            track_num = t["track_idx"] + 1
+            # use TEMPLATE IDs (family indices), not fitted latex strings
+            eq_map[("x", t["Fx"])].append({"slide": slide_index, "label": f"{track_num}-x"})
+            eq_map[("y", t["Fy"])].append({"slide": slide_index, "label": f"{track_num}-y"})
+            eq_map[("z", t["Fz"])].append({"slide": slide_index, "label": f"{track_num}-z"})
+
+            
             slides_payload.append({
                 "fid": t["fid"],
                 "Fx": t["Fx"], "Fy": t["Fy"], "Fz": t["Fz"],
                 "track_idx": t["track_idx"],
                 "event_id": t["event_id"],
-                "png": t["png"],                       # link target (as you used before)
+                "png": t["png"].replace("../",""),                       # link target (as you used before)
                 "img_src": t["png"].replace("../",""), # displayed img path (as you used before)
                 "metrics_line": metrics_line,
                 "eqx": t["eqx"], "eqy": t["eqy"], "eqz": t["eqz"],
             })
-        
-    slides_json = json.dumps(slides_payload)
-    html_text = "".join(html_parts).replace("__SLIDES_JSON__", slides_json)
+            
+            slide_index += 1
+    
+    # Preserve “first equation in template list” ordering:
+    # iterate through slides_payload in order and take first time we see an eq
+    def template_latex_for(coord, fam_idx):
+        # Display the parametric template form (a0, a1, ...) for that family
+        if coord == "x":
+            return r"$x(s) = " + template_to_latex_with_s(x_templates[fam_idx]) + r"$"
+        if coord == "y":
+            return r"$y(s) = " + template_to_latex_with_s(y_templates[fam_idx]) + r"$"
+        if coord == "z":
+            return r"$z(s) = " + template_to_latex_with_s(z_templates[fam_idx]) + r"$"
+        raise ValueError(coord)
 
+    seen = set()
+    eq_slides = []
+
+    # Iterate tracks in the same order as your slides, and “first time we see (coord,fam)”
+    for sp in slides_payload:
+        keys = [("x", sp["Fx"]), ("y", sp["Fy"]), ("z", sp["Fz"])]
+        for key in keys:
+            if key in seen:
+                continue
+            seen.add(key)
+            coord, fam_idx = key
+            eq_slides.append({
+                "key": [coord, fam_idx],
+                "eq": template_latex_for(coord, fam_idx),
+                "uses": eq_map[key],
+            })
+
+    eq_stats = {
+        "unique": len(eq_slides),
+        "total_components": 3 * len(slides_payload),
+    }
+
+    
+    slides_json = json.dumps(slides_payload)
+    eqs_json = json.dumps(eq_slides)
+    stats_json = json.dumps(eq_stats)
+    html_text = "".join(html_parts)
+    html_text = html_text.replace("__SLIDES_JSON__", slides_json)
+    html_text = html_text.replace("__EQS_JSON__", eqs_json)
+    html_text = html_text.replace("__EQ_STATS_JSON__", stats_json)
+    
     out_html = "track_results.html"
     with open(out_html, "w", encoding="utf-8") as f:
         f.write(html_text)
 
     print(f"[HTML] Wrote report to: {out_html}")
-
+    system("mv track_results.html /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/")
+    if OPEN_HTML:
+        system("open /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/track_results.html")
