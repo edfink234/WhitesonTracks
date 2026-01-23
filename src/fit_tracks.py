@@ -9,9 +9,45 @@ import pickle
 import os
 from os import system
 import json
+import re
+import pandas as pd
+
+def parse_event_number(f_tag: str) -> int:
+    """
+    Accepts strings like:
+      'event100000001-hits'
+      'event100000001'
+      '.../event100000001-hits.csv'
+    Returns the full event number as int, e.g. 100000001.
+    """
+    m = re.search(r"event(\d+)", str(f_tag))
+    if not m:
+        raise ValueError(f"Could not parse event number from: {f_tag}")
+    return int(m.group(1))
 
 round_floats = lambda expr, ndigits: expr.xreplace({f: sp.Float(round(float(f), ndigits)) for f in expr.atoms(sp.Float)})
 sech = lambda x: 1/np.cosh(x)
+
+def template_signature(template_or_expr, round_digits=8):
+    """
+    Return a canonical structural signature string for a sympy expression or parametric template.
+    Uses rounding to reduce floating-point fractional differences, then srepr(simplified_expr).
+    """
+    if isinstance(template_or_expr, dict):
+        expr = template_or_expr["expr"]
+    else:
+        expr = template_or_expr
+
+    # Round floats (helper defined earlier)
+    expr_rounded = round_floats(expr, round_digits)
+
+    try:
+        expr_simpl = sp.simplify(expr_rounded)
+    except Exception:
+        expr_simpl = expr_rounded
+
+    # srepr gives a structural representation (stable for equivalence checks)
+    return sp.srepr(expr_simpl)
 
 def sci_to_latex(sci_str):
     coeff, exp = sci_str.lower().split('e')
@@ -71,7 +107,47 @@ def r2_score_1d(y_true, y_pred):
         return 1.0 if ss_res == 0 else 0.0
 
     return 1.0 - ss_res / ss_tot
+    
+def load_sigmas_for_event(track_folder: str, event_num: int):
+    """
+    Read event{event_num}-hits.csv and return (sig_x, sig_y, sig_z, n_hits).
 
+    Backwards compatible:
+      - If sigma columns are missing, returns (None, None, None, n_hits).
+      - If file missing, raises FileNotFoundError.
+    """
+    hits_path = os.path.join(track_folder, f"event{int(event_num)}-hits.csv")
+    if not os.path.exists(hits_path):
+        raise FileNotFoundError(f"Hits CSV not found: {hits_path}")
+
+    df = pd.read_csv(hits_path)
+
+    # Always need r, phi to compute sigma_x/y (if sigmas exist)
+    if ("r" not in df.columns) or ("phi" not in df.columns):
+        raise ValueError(f"Required columns 'r' and 'phi' missing from {hits_path}")
+
+    n_hits = len(df)
+
+    # If no sigma columns (old noiseless datasets), just return None sigmas.
+    required_sigma_cols = {"sigma_r", "sigma_phi", "sigma_z"}
+    if not required_sigma_cols.issubset(df.columns):
+        return None, None, None, n_hits
+
+    r   = df["r"].to_numpy(dtype=float)
+    phi = df["phi"].to_numpy(dtype=float)
+    sr  = df["sigma_r"].to_numpy(dtype=float)
+    sph = df["sigma_phi"].to_numpy(dtype=float)
+    sz  = df["sigma_z"].to_numpy(dtype=float)
+
+    c = np.cos(phi)
+    s = np.sin(phi)
+
+    # Error propagation: x = r cos φ, y = r sin φ
+    sig_x = np.sqrt((c * sr)**2 + ((r * s) * sph)**2)
+    sig_y = np.sqrt((s * sr)**2 + ((r * c) * sph)**2)
+    sig_z = sz
+
+    return sig_x, sig_y, sig_z, n_hits
 
 def fit_until_both_conditions(s, y, model_kwargs, R2_THRESHOLD, min_iters=100, step=50, max_iters=np.inf, stop_flag_path="STOP_PYSR"):
     """
@@ -368,7 +444,7 @@ if __name__ == '__main__':
     OPEN_HTML = True
     create_dataset = False
     TEMPLATE_PATH = "track_templates.pkl"
-    track_folder = "../tracks_for_ed"
+    track_folder = ["../tracks_for_ed/v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01/", "../tracks_for_ed/v1_noiseless_69000/"][1]
     R2_THRESHOLD = 0.997
     RunPySR = False   # <-- set False to disable PySR discovery entirely
     MaxPySRIters = 100
@@ -652,11 +728,28 @@ if __name__ == '__main__':
             families_list.append(new_template_index)
             return expr_fitted_new, metrics_new
 
-        # --- Fit x, y, z this track --- #
-        expr_x, m_x = fit_dimension(s_all, x_all, x_templates, x_eqns, families_x, "x")
-        expr_y, m_y = fit_dimension(s_all, y_all, y_templates, y_eqns, families_y, "y")
-        expr_z, m_z = fit_dimension(s_all, z_all, z_templates, z_eqns, families_z, "z")
+        # --- Fit x, y, z this track (use per-hit sigmas) --- #
+        event_num = parse_event_number(f_all)           # e.g. 100000001
+        sig_x, sig_y, sig_z, n_hits = load_sigmas_for_event(track_folder, event_num)
         
+        if sig_x is None:
+            print(f"[info] event {event_num}: no sigma columns found → unweighted fits")
+        else:
+            print(f"[info] event {event_num}: sigma columns found → weighted fits")
+
+        # sanity: lengths must match loaded arrays
+        if len(s_all) != n_hits:
+            # defensive: if load_many_tracks filtered hits differently, warn and fall back to unweighted
+            print(f"[warning] mismatch in hit counts for event {f_all}: s_len={len(s_all)}, csv_hits={n_hits}. Using unweighted fit.")
+            expr_x, m_x = fit_dimension(s_all, x_all, x_templates, x_eqns, families_x, "x")
+            expr_y, m_y = fit_dimension(s_all, y_all, y_templates, y_eqns, families_y, "y")
+            expr_z, m_z = fit_dimension(s_all, z_all, z_templates, z_eqns, families_z, "z")
+        else:
+            # If sigmas are None (old datasets), this is just unweighted.
+            expr_x, m_x = fit_dimension(s_all, x_all, x_templates, x_eqns, families_x, "x", sigma=sig_x)
+            expr_y, m_y = fit_dimension(s_all, y_all, y_templates, y_eqns, families_y, "y", sigma=sig_y)
+            expr_z, m_z = fit_dimension(s_all, z_all, z_templates, z_eqns, families_z, "z", sigma=sig_z)
+
         # Store R^2 values for summaries
         r2_x_all.append(m_x["R2"])
         r2_y_all.append(m_y["R2"])
@@ -1116,10 +1209,15 @@ if __name__ == '__main__':
             
             # --- record equation usage (track number is 1-based for display) ---
             track_num = t["track_idx"] + 1
-            # use TEMPLATE IDs (family indices), not fitted latex strings
-            eq_map[("x", t["Fx"])].append({"slide": slide_index, "label": f"{track_num}-x"})
-            eq_map[("y", t["Fy"])].append({"slide": slide_index, "label": f"{track_num}-y"})
-            eq_map[("z", t["Fz"])].append({"slide": slide_index, "label": f"{track_num}-z"})
+            
+            # compute signature keys for the templates (store representative family idx)
+            sig_x = template_signature(x_templates[t["Fx"]])
+            sig_y = template_signature(y_templates[t["Fy"]])
+            sig_z = template_signature(z_templates[t["Fz"]])
+            # store mapping from (coord, sig) -> list of uses and remember a representative fam idx
+            eq_map[("x", sig_x)].append({"slide": slide_index, "label": f"{track_num}-x", "rep_fam": t["Fx"]})
+            eq_map[("y", sig_y)].append({"slide": slide_index, "label": f"{track_num}-y", "rep_fam": t["Fy"]})
+            eq_map[("z", sig_z)].append({"slide": slide_index, "label": f"{track_num}-z", "rep_fam": t["Fz"]})
 
             
             slides_payload.append({
@@ -1150,19 +1248,43 @@ if __name__ == '__main__':
     seen = set()
     eq_slides = []
 
-    # Iterate tracks in the same order as your slides, and “first time we see (coord,fam)”
-    for sp in slides_payload:
-        keys = [("x", sp["Fx"]), ("y", sp["Fy"]), ("z", sp["Fz"])]
-        for key in keys:
+    for sp_item in slides_payload:
+        keys = [("x", sp_item["Fx"]), ("y", sp_item["Fy"]), ("z", sp_item["Fz"])]
+        # For each coordinate, pick the signature for the family index
+        for coord, fam_idx in [("x", sp_item["Fx"]), ("y", sp_item["Fy"]), ("z", sp_item["Fz"])]:
+            if coord == "x":
+                sig = template_signature(x_templates[fam_idx])
+                rep_fam = fam_idx
+            elif coord == "y":
+                sig = template_signature(y_templates[fam_idx])
+                rep_fam = fam_idx
+            else:
+                sig = template_signature(z_templates[fam_idx])
+                rep_fam = fam_idx
+
+            key = (coord, sig)
             if key in seen:
                 continue
             seen.add(key)
-            coord, fam_idx = key
+
+            # Use the representative family index from the first recorded use if available
+            uses = eq_map.get(key, [])
+            rep_idx = uses[0]["rep_fam"] if uses else rep_fam
+
+            # Render latex for the representative family index
+            if coord == "x":
+                eq_text = r"$x(s) = " + template_to_latex_with_s(x_templates[rep_idx]) + r"$"
+            elif coord == "y":
+                eq_text = r"$y(s) = " + template_to_latex_with_s(y_templates[rep_idx]) + r"$"
+            else:
+                eq_text = r"$z(s) = " + template_to_latex_with_s(z_templates[rep_idx]) + r"$"
+
             eq_slides.append({
-                "key": [coord, fam_idx],
-                "eq": template_latex_for(coord, fam_idx),
-                "uses": eq_map[key],
+                "key": [coord, sig],
+                "eq": eq_text,
+                "uses": eq_map.get(key, []),
             })
+
 
     eq_stats = {
         "unique": len(eq_slides),

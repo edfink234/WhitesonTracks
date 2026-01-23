@@ -33,7 +33,7 @@ def load_single_track(csv_path):
 
 
 def load_many_tracks(folder_path, max_tracks=None, min_hits=6):
-    files = sorted(glob.glob(os.path.join(folder_path, "*.csv")))
+    files = sorted(glob.glob(os.path.join(folder_path, "*-hits.csv")))
     print(f"Found {len(files)} tracks.")
 
     S, X, Y, Z, F = [], [], [], [], []
