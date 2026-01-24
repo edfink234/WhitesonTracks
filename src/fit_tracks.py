@@ -59,8 +59,8 @@ def regression_metrics(y_true, y_pred, *, sigma=None, ddof=0, eps=1e-12):
 
     chi2:
       - If sigma is provided: sum(((y - yhat)/sigma)**2)
-      - Else: Pearson-style: sum((y - yhat)^2 / max(|yhat|, eps))
-        (common fallback when per-point uncertainties are unknown)
+      - Else: Pearson-style: sum((y - yhat)^2 / max(|yhat|, eps)) 
+        (common fallback when per-point uncertainties are unknown; \(\sigma ^{2}=\mu \approx \^{y}\))
 
     chi2_red uses (N - ddof) in denominator if possible.
     """
