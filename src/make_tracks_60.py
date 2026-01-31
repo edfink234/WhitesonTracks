@@ -33,7 +33,16 @@ INPUTS = {
     "WRITE_HIT_SIGMAS": True,
     "HIT_NOISE_SIGMA_XY": 0.01,
     "HIT_NOISE_SIGMA_Z": 0.01,
+    
+    # Standard Model?
+    "STANDARD_MODEL": True
 }
+
+# Physical Constants
+_C = 2.99792458e8               # speed of light, m/s
+_E_CHARGE = 1.602176634e-19     # elementary charge, C
+# Conversion factor: 1 (GeV/c) -> kg*m/s  (use E/c where 1 GeV = 1.602176634e-10 J)
+_GEV_C_TO_KGMS = (1.602176634e-10) / _C   # ≈ 5.344286e-19 kg·m/s
 
 def slug(x):
     """Filesystem-safe short token."""
@@ -76,6 +85,8 @@ def make_dataset_name(INPUTS):
         parts.append(f"noiseXY{slug(sig_xy)}_Z{slug(sig_z)}")
     else:
         parts.append("noiseless")
+    if INPUTS.get("STANDARD_MODEL", False):
+        parts.append("standardModel")
 
     return "v" + datetime.now().strftime("%Y%m%d_%H%M%S") + "__" + "__".join(parts)
 
@@ -98,6 +109,8 @@ HIT_NOISE_SIGMA_XY = float(INPUTS.get("HIT_NOISE_SIGMA_XY", 0.01))  # 100 micron
 HIT_NOISE_SIGMA_Z  = float(INPUTS.get("HIT_NOISE_SIGMA_Z",  0.01))  # 100 microns
 ADD_HIT_NOISE      = INPUTS.get("ADD_HIT_NOISE", False)
 WRITE_HIT_SIGMAS   = INPUTS.get("WRITE_HIT_SIGMAS", True)
+# Standard Model?
+STANDARD_MODEL = INPUTS.get("STANDARD_MODEL", False)
 
 ATLASradii = np.linspace(smallest_layer, largest_layer, num_layers)
 
@@ -208,6 +221,222 @@ def fourierExpand(fourierDim, Lambda, t, chunk_size = chunk_size):
     fourList = np.array(fourList)
     return (fourList, shift)
 
+import numpy as np
+
+# Physical constants (exact)
+_C = 2.99792458e8               # speed of light, m/s
+_E_CHARGE = 1.602176634e-19     # elementary charge, C
+# Conversion factor: 1 (GeV/c) -> kg*m/s  (use E/c where 1 GeV = 1.602176634e-10 J)
+_GEV_C_TO_KGMS = (1.602176634e-10) / _C   # ≈ 5.344286e-19 kg·m/s
+
+import numpy as np
+
+def _count_layer_crossings_for_track(r_samples, z_samples, layer_radii_cm, z_limit_cm, tol_cm=0.5):
+    """
+    Count how many layer intersections a sampled track produces.
+    Method: for each layer radius, check if r_samples crosses the radius (sign change)
+    between consecutive sample points. Also require the z at crossing to be within +/- z_limit_cm/2.
+    tol_cm: small tolerance applied to r difference when checking equality.
+    """
+    n_layers = len(layer_radii_cm)
+    crossings = 0
+
+    # r_samples, z_samples are 1D arrays over samples t
+    for R_layer in layer_radii_cm:
+        # evaluate f = r - R_layer
+        f = r_samples - R_layer
+        # find indices where sign change or very near crossing
+        sc = np.where(np.abs(f) <= tol_cm)[0]
+        if sc.size > 0:
+            # if any sampled point already near the radius, check z at that point
+            idx = sc[0]
+            if abs(z_samples[idx]) <= z_limit_cm / 2.0:
+                crossings += 1
+                continue
+        # else check sign changes between consecutive samples
+        signs = f[:-1] * f[1:]
+        sign_change_idx = np.where(signs < 0)[0]
+        accepted = False
+        for idx in sign_change_idx:
+            # linear interpolation to approximate crossing z
+            f1, f2 = f[idx], f[idx+1]
+            if f2 == f1:
+                frac = 0.5
+            else:
+                frac = abs(f1) / (abs(f1) + abs(f2))
+            z_cross = z_samples[idx] + frac * (z_samples[idx+1] - z_samples[idx])
+            if abs(z_cross) <= z_limit_cm / 2.0:
+                crossings += 1
+                accepted = True
+                break
+        # if accepted or found near-sample, we already counted
+    return crossings
+
+def tracks_standard_model_helix_cm_with_min_hits(
+    t,
+    chunk_size,
+    radii,             # expects radii in centimeters (1D array)
+    detector_length,   # centimeters
+    B_field=1.0,       # Tesla
+    min_hits=20,       # target minimal number of layer hits per track
+    max_attempts=30,   # how many tries to accept a track before giving up
+    phi_scale=1.0,     # radians per t-unit
+    d0_max_cm=None,    # if None, will be set to ~0.3 * largest layer (helps crossings)
+    R_choice='uniform_in_radius_cm',  # see below
+    tol_cm=0.5,        # layer-crossing tolerance in cm
+    random_seed=None,
+):
+    """
+    Helix generator (returns ndarray shape (len(t), chunk_size, 3) in cm) that tries to
+    ensure each track has at least `min_hits` layer intersections.
+
+    Key behavior tuned to your dataset (which uses cm):
+      - Instead of sampling pT directly, we sample R_cm uniformly across a useful range
+        so tracks' transverse curvature spans the detector. Then compute pT accordingly.
+      - d0_max_cm defaults to 0.3 * largest_layer if not provided (gives transverse offsets).
+      - For each track we attempt up to max_attempts to sample parameters that yield >= min_hits.
+        If max_attempts is reached we accept the best attempt.
+
+    Parameters:
+      - R_choice: 'uniform_in_radius_cm' (sample R directly), or 'derived_from_pT' (not used here).
+      - returns tracks in centimeters (x_cm, y_cm, z_cm)
+      
+    Output: ndarray shape (len(t), chunk_size, 3) with coordinates in CM:
+      (x_cm, y_cm, z_cm)
+
+    Units / conventions:
+      - pT, pz sampled in GeV/c (HEP momentum units).
+      - B_field in Tesla.
+      - radii and detector_length in centimeters (cm).
+      - d0_max_cm in cm, outputs in cm.
+
+    Physics -> unit conversion summary (explicit):
+      Exact SI relation:
+        R [m] = pT_SI [kg·m/s] / (e [C] * B [T])
+
+      Convert pT from GeV/c to kg·m/s:
+        1 GeV = 1.602176634e-10 J
+        pT[kg·m/s] = pT_GeV * (1.602176634e-10) / c
+                  = pT_GeV * (1.602176634e-10) / 2.99792458e8
+
+      Combining constants gives the HEP shorthand:
+        R [m] = pT[GeV/c] / (0.299792458 * B[T])   # exact numeric factor
+      People often round 0.299792458 → 0.3 for quick estimates.
+
+      To express R in CENTIMETERS:
+        R [cm] = 100 * R [m] = 100 * pT / (0.299792458 * B)
+               = pT / (0.00299792458 * B)
+
+      This function uses the exact 0.299792458 and multiplies by 100 to produce R in cm.
+
+    Parameter meanings:
+      - phi = phi0 + q_sign * phi_scale * t
+      - x = xc + R_cm * cos(phi)
+      - y = yc + R_cm * sin(phi)
+      - z = z0 + (pz/pT) * R_cm * (phi - phi0)   # all lengths in cm, pz/pT dimensionless
+
+    Returns:
+      ndarray (nt, chunk_size, 3) in cm
+    """
+
+    rng = np.random.RandomState(random_seed) if random_seed is not None else np.random
+
+    t = np.asarray(t)
+    nt = len(t)
+    layer_radii = np.asarray(radii)  # cm
+    largest_layer = np.max(layer_radii)
+    if d0_max_cm is None:
+        d0_max_cm = max(1.0, 0.3 * largest_layer)  # heuristic: make centers offset enough
+
+    tracks = np.zeros((nt, chunk_size, 3), dtype=float)
+
+    # Precompute: convert desired R_cm range to pT if needed (here we work in R_cm directly)
+    # Choose R_cm min/max so helices span inner->outer layers; use a slightly wider range
+    R_min_cm = max( max(1.0, np.min(layer_radii)*0.5), 0.5 )      # at least ~1 cm
+    R_max_cm = max( max( np.max(layer_radii)*1.2, R_min_cm + 1.0 ), 10.0 )
+
+    best_candidates = [None] * chunk_size
+    best_scores = [-1] * chunk_size  # best number of hits seen so far
+
+    for track_idx in range(chunk_size):
+        accepted = False
+        best_track = None
+        best_nhits = -1
+
+        for attempt in range(max_attempts):
+            # SAMPLE PARAMETERS FOR ONE TRACK
+            q_sign = rng.choice([-1.0, 1.0])
+            # sample transverse radius R in CM *directly* (guarantees sensible curvature)
+            R_cm = rng.uniform(R_min_cm, R_max_cm)
+            # pick phi0 and z0
+            phi0 = rng.uniform(0.0, 2.0*np.pi)
+            z0 = rng.uniform(-detector_length/2.0, detector_length/2.0)
+            # center offset (impact parameter) in cm
+            d0 = rng.uniform(0.0, d0_max_cm)
+            d0_dir = rng.uniform(0.0, 2.0*np.pi)
+            xc = d0 * np.cos(d0_dir)
+            yc = d0 * np.sin(d0_dir)
+            # pick pz/pT ratio by sampling a plausible pz and pT consistent with R_cm (for z advancement)
+            # compute pT corresponding to R_cm: pT [GeV/c] = R_m * 0.299792458 * B
+            R_m = R_cm * 0.01
+            pT = R_m * 0.299792458 * B_field
+            # make pT not vanishingly small; add small jitter
+            pT = max(0.01, pT) * (1.0 + rng.uniform(-0.2, 0.2))
+            # choose pz so pz/pT between -2 and 2 (controls pitch)
+            pz = pT * rng.uniform(-1.5, 1.5)
+
+            # build phi samples (nt,)
+            phi = phi0 + (q_sign * phi_scale) * t  # shape (nt,)
+            cosphi = np.cos(phi)
+            sinphi = np.sin(phi)
+
+            x = xc + R_cm * cosphi
+            y = yc + R_cm * sinphi
+            delta_phi = phi - phi0
+            # z advance: z = z0 + (pz/pT) * R_cm * delta_phi
+            z = z0 + ( (pz / pT) * R_cm * delta_phi )
+
+            r = np.sqrt(x*x + y*y)
+
+            # count how many distinct layer radii are crossed
+            nhits = _count_layer_crossings_for_track(r, z, layer_radii, detector_length, tol_cm=tol_cm)
+
+            # Keep best seen
+            if nhits > best_nhits:
+                best_nhits = nhits
+                best_track = (x.copy(), y.copy(), z.copy())
+
+            # Accept if meets threshold
+            if nhits >= min_hits:
+                accepted = True
+                tracks[:, track_idx, 0] = x
+                tracks[:, track_idx, 1] = y
+                tracks[:, track_idx, 2] = z
+                break
+
+        # finished attempts for this track
+        if not accepted:
+            # fallback: accept best candidate found (may have fewer than min_hits)
+            if best_track is None:
+                # extremely unlikely: fallback to trivial straight small-radius
+                phi = phi0 + (q_sign * phi_scale) * t
+                x = xc + R_cm * np.cos(phi)
+                y = yc + R_cm * np.sin(phi)
+                z = z0 + ( (pz / pT) * R_cm * (phi - phi0) )
+                tracks[:, track_idx, 0] = x
+                tracks[:, track_idx, 1] = y
+                tracks[:, track_idx, 2] = z
+            else:
+                tracks[:, track_idx, 0] = best_track[0]
+                tracks[:, track_idx, 1] = best_track[1]
+                tracks[:, track_idx, 2] = best_track[2]
+
+        # Debug book-keeping optional: store best_scores
+        best_scores[track_idx] = best_nhits
+
+    # Optionally you can return (tracks, best_scores) to inspect how many hits each track has
+    return (tracks, best_scores)  # in cm
+
 def tracks_cylindrical_fourier_balls(t,fourierDim, Lambda, chunk_size, radii, min_radii, centers):
 
     #tracemalloc.start()
@@ -261,10 +490,13 @@ def map_curve_to_hits(curve, min_dist_to_detector_layer):
     hits = np.concatenate((hits, (layerID[np.newaxis, :]).T), axis = 1)
     return hits
 
-def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii,fourierDim,times ,Centers ,Lambda = np.max(ATLASradii), min_dist_to_detector_layer = 0.001):
+def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii, fourierDim, times, Centers, Lambda = np.max(ATLASradii), min_dist_to_detector_layer = 0.001):
     #Tracks has shape (chunk_size_train,fourDimTrain)
-
-    Tracks = tracks_cylindrical_fourier_balls(times,fourierDim,Lambda,chunk_size,Radii, min_radii, Centers)
+    Tracks = None
+    if STANDARD_MODEL:
+        Tracks, best_scores = tracks_standard_model_helix_cm_with_min_hits(t=times, chunk_size=chunk_size, radii=ATLASradii, detector_length=detector_length, B_field=bField, random_seed=42)
+    else:
+        Tracks = tracks_cylindrical_fourier_balls(times,fourierDim,Lambda,chunk_size,Radii, min_radii, Centers)
     signal_hits = [] 
     for track in range(chunk_size):
 

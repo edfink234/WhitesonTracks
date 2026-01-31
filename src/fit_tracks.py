@@ -442,13 +442,28 @@ if __name__ == '__main__':
     np.sech = lambda x: 1/np.cosh(x)
     OPEN_PNGS = False
     OPEN_HTML = True
-    create_dataset = False
+    create_dataset = True
     TEMPLATE_PATH = "track_templates.pkl"
-    track_folder = ["../tracks_for_ed/v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01/", "../tracks_for_ed/v1_noiseless_69000/"][1]
+    ADD_FUNC_TO_TEMPLATES = True
+    track_dataset_idx = 0
+    out_html = ["v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html", "v1_noiseless_69000.html", "v20260128_185949__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html"]
+    track_folder = [f"../tracks_for_ed/{i[:-5]}" for i in out_html]
+    out_html = out_html[track_dataset_idx]
+    track_folder = track_folder[track_dataset_idx]
+    track_folder = ["../tracks_for_ed/v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01/", "../tracks_for_ed/v1_noiseless_69000/"][track_dataset_idx]
+    
+    dataset_labels = [
+        "v20260122_163839 train/test (noise XY=0.01, Z=0.01)",
+        "v1_noiseless_69000 (no sigma columns)",
+        "
+    ]
+    dataset_label = dataset_labels[track_dataset_idx]
+    
+    outfile_str = out_html[:-5]
     R2_THRESHOLD = 0.997
-    RunPySR = False   # <-- set False to disable PySR discovery entirely
+    RunPySR = False   # Whether to enable (True) or disable (False) PySR discovery
     MaxPySRIters = 100
-    num_tracks = 100
+    num_tracks = 5
     
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
@@ -590,44 +605,131 @@ if __name__ == '__main__':
     r2_x_all, r2_y_all, r2_z_all = [], [], [] # R^2 values for each track and coordinate
 
     S, X, Y, Z, F = load_many_tracks(track_folder, max_tracks=num_tracks)
+    num_tracks = len(S)
     assert((len(S), len(X), len(Y), len(Z), len(F)) == (num_tracks, num_tracks, num_tracks, num_tracks, num_tracks))
 #    print(f"len(S), len(X), len(Y), len(Z), len(F) = {(len(S), len(X), len(Y), len(Z), len(F))}")
     
-    def create_stubborn_track_dataset(X, Y, file_path = "", latex_eqn = "", show = False, plot_func = None):
+    def create_stubborn_track_dataset(
+        X, Y,
+        file_path="",
+        latex_eqn="",
+        show=False,
+        plot_func=None,          # callable for plotting-only mode
+        fitPlotFunc=False,
+        fit_expr=None,           # SymPy expr (with float seeds) for fitting mode
+        s_name="x0",
+        sigma=None,
+        coord="x"
+    ):
         stubborn_track_dataset = np.hstack((X.reshape(-1,1), Y.reshape(-1,1)))
-        assert(stubborn_track_dataset.shape[0] == X.shape[0])
-        assert(stubborn_track_dataset.shape[0] == Y.shape[0])
-        assert(stubborn_track_dataset.shape[1] == 2)
+        assert stubborn_track_dataset.shape[0] == X.shape[0]
+        assert stubborn_track_dataset.shape[0] == Y.shape[0]
+        assert stubborn_track_dataset.shape[1] == 2
+
         if file_path:
-            np.savetxt(file_path, stubborn_track_dataset, delimiter = ',')
+            np.savetxt(file_path, stubborn_track_dataset, delimiter=',')
             print(f"Data saved to {file_path}")
         else:
             print(stubborn_track_dataset)
+
         if show:
-            plt.scatter(stubborn_track_dataset[:,0], stubborn_track_dataset[:, 1], label = "Data")
-            if plot_func:
-                s_min = stubborn_track_dataset[:,0].min()
-                s_max = stubborn_track_dataset[:,0].max()
-                s_vals = np.linspace(s_min, s_max, 1000)
-                y_true = stubborn_track_dataset[:,1]
-                y_pred = plot_func(stubborn_track_dataset[:,0])
-                R2 = r2_score_1d(y_true, y_pred)
-                plt.plot(s_vals, plot_func(s_vals), label = fr"Fit: $R^2={R2:.3f}$" + "\n" + latex_eqn)
-                plt.xlabel("s")
-                plt.ylabel("z")
-                plt.legend()
+            s_data = stubborn_track_dataset[:, 0].astype(float)
+            y_true = stubborn_track_dataset[:, 1].astype(float)
+
+            plt.scatter(s_data, y_true, label="Data")
+
+            s_vals = np.linspace(s_data.min(), s_data.max(), 1000)
+
+            if fitPlotFunc:
+                if plot_func is None:
+                    raise ValueError("fitPlotFunc=True requires plot_func to be a SymPy expression with float seeds.")
+
+                template = make_parametric_template(plot_func, s_name=s_name)
+                metrics, p_opt, expr_fitted, y_pred = fit_template_to_data(
+                    template, s_data, y_true, sigma=sigma
+                )
+
+                # plot fitted curve
+                f_plot = sp.lambdify((template["s_sym"],), expr_fitted, "numpy")
+
+                if ADD_FUNC_TO_TEMPLATES:
+                    def _template_signature(t):
+                        # t is a template dict with key "expr"
+                        return sp.srepr(t["expr"])
+
+                    def _load_template_db(path):
+                        if not os.path.exists(path):
+                            return {"x_templates": [], "y_templates": [], "z_templates": []}
+                        with open(path, "rb") as f:
+                            db = pickle.load(f)
+
+                        # Backwards/defensive normalization
+                        if isinstance(db, list):
+                            # old format: treat as x_templates by default
+                            db = {"x_templates": db, "y_templates": [], "z_templates": []}
+                        elif isinstance(db, dict):
+                            db.setdefault("x_templates", [])
+                            db.setdefault("y_templates", [])
+                            db.setdefault("z_templates", [])
+                        else:
+                            raise TypeError(f"Unexpected templates db type: {type(db)}")
+                        return db
+
+                    def _save_template_db(path, db):
+                        with open(path, "wb") as f:
+                            pickle.dump(db, f)
+
+                    coord_key = f"{coord.lower()}_templates"   # requires coord in {"x","y","z"}
+                    db = _load_template_db(TEMPLATE_PATH)
+
+                    bucket = db[coord_key]
+
+                    new_sig = _template_signature(template)
+                    existing_sigs = {_template_signature(t) for t in bucket}
+
+                    if new_sig not in existing_sigs:
+                        bucket.append(template)
+                        _save_template_db(TEMPLATE_PATH, db)
+                        print(f"[template] Added new template to {coord_key} → {TEMPLATE_PATH}")
+                    else:
+                        print(f"[template] Template already exists in {coord_key}, not adding.")
+                plt.plot(
+                    s_vals, f_plot(s_vals),
+                    label=fr"Fit (template): $R^2={metrics['R2']:.3f}$" + "\n" + latex_eqn,
+                )
+
+                print("Fitted params:", p_opt)
+                print("Fitted expr:", expr_fitted)
+                print("Metrics:", metrics)
+
+            else:
+                if plot_func is not None:
+                    y_pred = plot_func(s_data)
+                    R2 = r2_score_1d(y_true, y_pred)
+                    plt.plot(
+                        s_vals, plot_func(s_vals),
+                        label=fr"Fit: $R^2={R2:.3f}$" + ("\n" + latex_eqn if latex_eqn else ""),
+                    )
+
+            plt.xlabel("s")
+            plt.ylabel("z")
+            plt.legend()
             plt.show()
         exit()
     
     if create_dataset:
         base_path = "../stubborn_track_csvs"
-        file_path = f"{base_path}/event100000003-hits_Z.csv"
-        file_path = ""
+        track_number = 39
+        file_path = f"{base_path}/event10000000{track_number}-hits_X.csv"
+        coord = file_path[-5].lower()
+#        file_path = ""
 #        plot_func = lambda x0: (-34.520199 * np.sech((np.sqrt(9.030267) - (x0 ** -1.453420))))
 #        plot_func_eqn = r"$z(s) = - 34.52 \operatorname{sech}{\left(s^{-1.45} - 3.01 \right)}$"
-        plot_func = lambda s: (((((0.508292 ** (-5.130599 + np.cos((s * 7.306336)))) * (-0.622545 + np.sech((-2.263896 - (-11.663861 * s))))) + np.cos((4 ** (2.492631 - s)))) + ((0.987333 + s) ** -72.499292)) + np.cos((np.sin(s) / np.exp(-3.515159))))
-        plot_func_eqn = r"$z(s) = {0.51}^{\cos{\left(7.31 s \right)} - 5.13} \left(\operatorname{sech}{\left(11.66 s - 2.26 \right)} - 0.62\right) + \left(s + 0.99\right)^{-72.5} + \cos{\left(4^{2.49 - s} \right)} + \cos{\left(33.62 \sin{\left(s \right)} \right)}$"
-        create_stubborn_track_dataset(S[2], Z[2], file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn)
+        x0 = sp.Symbol("x0")
+        
+        plot_func = (sp.Float(28.651600) - (sp.Float(19.777920439906723) ** sp.cos((sp.exp(sp.Float(2.730276)) * x0))))
+        plot_func_eqn = r"$z(s) = 27.287 - 8.549\cdot\cos(13.842\cdot\mathrm{asin}(x))$"
+        create_stubborn_track_dataset(S[track_number-1], X[track_number-1], file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = True, coord = coord)
         
 
     model_kwargs = dict(
@@ -646,6 +748,20 @@ if __name__ == '__main__':
         warm_start=True
     )
     from pysr import PySRRegressor
+    def plot_points(ax, s, y, sigma, label="Data"):
+        if sigma is None:
+            ax.scatter(s, y, s=10, alpha=0.6, label=label)
+        else:
+            ax.errorbar(
+                s, y,
+                yerr=sigma,
+                fmt="o",
+                markersize=3,
+                elinewidth=1,
+                capsize=2,
+                alpha=0.6,
+                label=label
+            )
 
     for track_idx, (s_all, x_all, y_all, z_all, f_all) in enumerate(zip(S, X, Y, Z, F)):
         s_all_reshaped = s_all.reshape(-1, 1)
@@ -653,6 +769,29 @@ if __name__ == '__main__':
         # --- Helper inner function to handle one coordinate --- #
         def fit_dimension(s_data, y_data, templates, eqn_list, families_list, coord_name, *, sigma=None):
             print(f"\n--- Fitting Track {track_idx}, coordinate {coord_name} ---")
+
+            # Selection logic:
+            #  - If sigma is provided: prefer reduced chi^2 (chi2_red) closest to 1
+            #  - Else: prefer highest R^2 and require R2_THRESHOLD for acceptance
+            CHI2_RED_TARGET = 1.0
+            CHI2_RED_TOL = 0.2   # "good enough" band; tweak if you want stricter/looser
+
+            def is_weighted():
+                return sigma is not None
+
+            def better(a, b):
+                """Return True if metrics dict a is better than b under the active criterion."""
+                if b is None:
+                    return True
+                if is_weighted():
+                    da = abs(a["chi2_red"] - CHI2_RED_TARGET)
+                    db = abs(b["chi2_red"] - CHI2_RED_TARGET)
+                    if da != db:
+                        return da < db
+                    # tie-break: higher R2
+                    return a["R2"] > b["R2"]
+                else:
+                    return a["R2"] > b["R2"]
 
             best_metrics = None
             best_expr = None
@@ -668,33 +807,62 @@ if __name__ == '__main__':
                         print(f"[Track {track_idx} {coord_name}] Skipping template {idx} due to ValueError: {e}")
                         continue
 
-                    if (best_metrics is None) or (metrics["R2"] > best_metrics["R2"]):
+                    if better(metrics, best_metrics):
                         best_metrics = metrics
                         best_expr = expr_fitted
                         best_template_index = idx
 
             # 2) If good enough, use best template
-            if templates and best_metrics is not None and best_metrics["R2"] >= R2_THRESHOLD:
-                print(f"[Track {track_idx} {coord_name}] Used existing template {best_template_index} "
-                      f"with R^2={best_metrics['R2']:.3f}")
-                eqn_list.append(best_expr)
-                families_list.append(best_template_index)
-                return best_expr, best_metrics
+            if templates and best_metrics is not None:
+                if is_weighted():
+                    if abs(best_metrics["chi2_red"] - CHI2_RED_TARGET) <= CHI2_RED_TOL:
+                        print(
+                            f"[Track {track_idx} {coord_name}] Used existing template {best_template_index} "
+                            f"with chi2_red={best_metrics['chi2_red']:.3f} (target 1)"
+                        )
+                        eqn_list.append(best_expr)
+                        families_list.append(best_template_index)
+                        return best_expr, best_metrics
+                else:
+                    if best_metrics["R2"] >= R2_THRESHOLD:
+                        print(
+                            f"[Track {track_idx} {coord_name}] Used existing template {best_template_index} "
+                            f"with R^2={best_metrics['R2']:.3f}"
+                        )
+                        eqn_list.append(best_expr)
+                        families_list.append(best_template_index)
+                        return best_expr, best_metrics
 
             # 3) Otherwise, run PySR to discover new form
-            best_R2 = -np.inf if best_metrics is None else best_metrics["R2"]
             if not RunPySR:
-                print(f"[Track {track_idx} {coord_name}] best_R2={best_R2:.3f} < {R2_THRESHOLD} "
-                      f"but RunPySR=False, so skipping PySR and using best available template.")
                 if best_expr is None:
                     raise RuntimeError(
                         f"No templates available (or all failed) for Track {track_idx} {coord_name}, "
                         f"and RunPySR=False. Can't produce a fit."
                     )
+                if is_weighted():
+                    print(
+                        f"[Track {track_idx} {coord_name}] RunPySR=False; using best available template "
+                        f"(chi2_red={best_metrics['chi2_red']:.3f}, target 1)."
+                    )
+                else:
+                    print(
+                        f"[Track {track_idx} {coord_name}] best_R2={best_metrics['R2']:.3f} < {R2_THRESHOLD} "
+                        f"but RunPySR=False; using best available template."
+                    )
                 eqn_list.append(best_expr)
                 families_list.append(best_template_index)
                 return best_expr, best_metrics
-            print(f"best_R2 of {best_R2} is less than {R2_THRESHOLD}, running PYSR now.")
+
+            if is_weighted():
+                best_delta = float("inf") if best_metrics is None else abs(best_metrics["chi2_red"] - CHI2_RED_TARGET)
+                print(
+                    f"[Track {track_idx} {coord_name}] best |chi2_red-1|={best_delta:.3f} > {CHI2_RED_TOL} "
+                    f"→ running PySR now."
+                )
+            else:
+                best_R2 = -np.inf if best_metrics is None else best_metrics["R2"]
+                print(f"best_R2 of {best_R2} is less than {R2_THRESHOLD}, running PYSR now.")
 
             model, R2_final, iters = fit_until_both_conditions(
                 s_data.reshape(-1, 1),
@@ -713,15 +881,30 @@ if __name__ == '__main__':
             new_template_index = len(templates) - 1
 
             metrics_new, _, expr_fitted_new, _ = fit_template_to_data(template, s_data, y_data, sigma=sigma)
-            
+
             # If templates existed and one of them was better, keep it instead of PySR
-            if best_metrics is not None and best_metrics["R2"] >= metrics_new["R2"]:
-                templates.pop()  # remove the appended PySR template
-                print(f"[Track {track_idx} {coord_name}] PySR R^2={metrics_new['R2']:.3f} "
-                      f"but best template R^2={best_metrics['R2']:.3f}; keeping template {best_template_index}.")
-                eqn_list.append(best_expr)
-                families_list.append(best_template_index)
-                return best_expr, best_metrics
+            if best_metrics is not None:
+                if is_weighted():
+                    if abs(best_metrics["chi2_red"] - CHI2_RED_TARGET) <= abs(metrics_new["chi2_red"] - CHI2_RED_TARGET):
+                        templates.pop()  # remove appended PySR template
+                        print(
+                            f"[Track {track_idx} {coord_name}] PySR chi2_red={metrics_new['chi2_red']:.3f} "
+                            f"but best template chi2_red={best_metrics['chi2_red']:.3f}; "
+                            f"keeping template {best_template_index}."
+                        )
+                        eqn_list.append(best_expr)
+                        families_list.append(best_template_index)
+                        return best_expr, best_metrics
+                else:
+                    if best_metrics["R2"] >= metrics_new["R2"]:
+                        templates.pop()  # remove appended PySR template
+                        print(
+                            f"[Track {track_idx} {coord_name}] PySR R^2={metrics_new['R2']:.3f} "
+                            f"but best template R^2={best_metrics['R2']:.3f}; keeping template {best_template_index}."
+                        )
+                        eqn_list.append(best_expr)
+                        families_list.append(best_template_index)
+                        return best_expr, best_metrics
 
             # Otherwise accept PySR
             eqn_list.append(expr_fitted_new)
@@ -787,7 +970,7 @@ if __name__ == '__main__':
            fr"$\mathrm{{MAE}}={m_x['MAE']:.3e}$, "
            fr"$\chi^2={m_x['chi2']:.3e}$, "
            fr"$\chi^2_\nu={m_x['chi2_red']:.3e}$" + "\n" + eq_x)
-        axes[0].scatter(s_all, x_all, s=10, alpha=0.6, label="Data")
+        plot_points(axes[0], s_all, x_all, sig_x, label="Data")
         axes[0].plot(s_plot, x_pred, linewidth=2, label=label_x)
         axes[0].set_ylabel("$x$")
         axes[0].legend(fontsize=8)
@@ -798,7 +981,7 @@ if __name__ == '__main__':
            fr"$\mathrm{{MAE}}={m_y['MAE']:.3e}$, "
            fr"$\chi^2={m_y['chi2']:.3e}$, "
            fr"$\chi^2_\nu={m_y['chi2_red']:.3e}$" + "\n" + eq_y)
-        axes[1].scatter(s_all, y_all, s=10, alpha=0.6, label="Data")
+        plot_points(axes[1], s_all, y_all, sig_y, label="Data")
         axes[1].plot(s_plot, y_pred, linewidth=2, label=label_y)
         axes[1].set_ylabel("$y$")
         axes[1].legend(fontsize=8)
@@ -809,17 +992,18 @@ if __name__ == '__main__':
            fr"$\mathrm{{MAE}}={m_z['MAE']:.3e}$, "
            fr"$\chi^2={m_z['chi2']:.3e}$, "
            fr"$\chi^2_\nu={m_z['chi2_red']:.3e}$" + "\n" + eq_z)
-        axes[2].scatter(s_all, z_all, s=10, alpha=0.6, label="Data")
+        plot_points(axes[2], s_all, z_all, sig_z, label="Data")
         axes[2].plot(s_plot, z_pred, linewidth=2, label=label_z)
         axes[2].set_ylabel("$z$")
         axes[2].set_xlabel("$s$")
         axes[2].legend(fontsize=8)
 
         plt.tight_layout()
-        plt.savefig(f"../pngs/SR_track_{f_all}.png", dpi=5*96)
-        system(f"open ../pngs/SR_track_{f_all}.png") if OPEN_PNGS else None
-        
-        png_rel = f"../pngs/SR_track_{f_all}.png"  # matches your save path
+        img_str = f"../pngs/SR_track_{outfile_str}{f_all}.png"
+        plt.savefig(img_str, dpi=5*96)
+        system(f"open {img_str}") if OPEN_PNGS else None
+        system(f"cp {img_str} /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/pngs/")
+        png_rel = f"{img_str}"  # matches your save path
 
         track_infos.append({
             "track_idx": track_idx,
@@ -915,7 +1099,7 @@ if __name__ == '__main__':
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Track Fit Report (Scroller)</title>
+  <title>Track Fit Report - __DATASET_LABEL__</title>
 
   <!-- MathJax for LaTeX rendering -->
   <script>
@@ -1016,7 +1200,8 @@ if __name__ == '__main__':
   </style>
 </head>
 <body>
-  <h1>Track Fit Report</h1>
+  <h1>Track Fit Report - __DATASET_LABEL__</h1>
+  <p class="subtle">Dataset: <span class="mono">__DATASET_FOLDER__</span></p>
   <p class="subtle">Use ← / → or the buttons to scroll through tracks (grouped by family).</p>
 
   <div class="toolbar">
@@ -1299,12 +1484,13 @@ if __name__ == '__main__':
     html_text = html_text.replace("__SLIDES_JSON__", slides_json)
     html_text = html_text.replace("__EQS_JSON__", eqs_json)
     html_text = html_text.replace("__EQ_STATS_JSON__", stats_json)
-    
-    out_html = "track_results.html"
+    html_text = html_text.replace("__DATASET_LABEL__", html_escape(dataset_label))
+    html_text = html_text.replace("__DATASET_FOLDER__", html_escape(track_folder))
+
     with open(out_html, "w", encoding="utf-8") as f:
         f.write(html_text)
 
     print(f"[HTML] Wrote report to: {out_html}")
-    system("mv track_results.html /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/")
+    system(f"mv {out_html} /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/")
     if OPEN_HTML:
-        system("open /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/track_results.html")
+        system(f"open /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/{out_html}")
