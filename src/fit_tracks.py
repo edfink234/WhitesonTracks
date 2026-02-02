@@ -89,7 +89,94 @@ def regression_metrics(y_true, y_pred, *, sigma=None, ddof=0, eps=1e-12):
     chi2_red = chi2 / dof
 
     return {"R2": R2, "MSE": MSE, "MAE": MAE, "chi2": chi2, "chi2_red": chi2_red}
+    
+def helix_xyz(s, p):
+    """
+    Simple 3D helix parametrized by s:
+      x = xc + R cos(omega s + phi0)
+      y = yc + R sin(omega s + phi0)
+      z = z0 + k s
+    p = [xc, yc, R, omega, phi0, z0, k]
+    """
+    xc, yc, R, omega, phi0, z0, k = p
+    th = omega * s + phi0
+    x = xc + R * np.cos(th)
+    y = yc + R * np.sin(th)
+    z = z0 + k * s
+    return x, y, z
 
+
+def fit_standard_model_helix(s, x, y, z, *, sig_x=None, sig_y=None, sig_z=None):
+    """
+    Fit helix to all coords at once using least_squares.
+    Returns: (p_opt, metrics_xyz)
+      metrics_xyz: dict with chi2, chi2_red, plus per-dim R2/MSE/MAE if you want.
+    """
+
+    s = np.asarray(s).ravel()
+    x = np.asarray(x).ravel()
+    y = np.asarray(y).ravel()
+    z = np.asarray(z).ravel()
+    n = len(s)
+
+    # --- initial guess (cheap + robust) ---
+    xc0, yc0 = np.mean(x), np.mean(y)
+    r0 = np.sqrt((x - xc0)**2 + (y - yc0)**2)
+    R0 = np.median(r0) if np.isfinite(np.median(r0)) else 1.0
+    omega0 = 2*np.pi / (s.max() - s.min() + 1e-9)   # ~one turn across the s-range
+    phi0 = np.arctan2(np.mean(y - yc0), np.mean(x - xc0))
+    z00 = np.mean(z)
+    k0 = (z[-1] - z[0]) / (s[-1] - s[0] + 1e-9)
+
+    p0 = np.array([xc0, yc0, R0, omega0, phi0, z00, k0], dtype=float)
+
+    BIG = 1e6
+
+    def resid(p):
+        with np.errstate(all="ignore"):
+            xp, yp, zp = helix_xyz(s, p)
+
+        if (not np.all(np.isfinite(xp))) or (not np.all(np.isfinite(yp))) or (not np.all(np.isfinite(zp))):
+            return np.full(3*n, BIG, dtype=float)
+
+        rx = xp - x
+        ry = yp - y
+        rz = zp - z
+
+        if sig_x is not None:
+            rx = rx / np.asarray(sig_x).ravel()
+        if sig_y is not None:
+            ry = ry / np.asarray(sig_y).ravel()
+        if sig_z is not None:
+            rz = rz / np.asarray(sig_z).ravel()
+
+        r = np.concatenate([rx, ry, rz])
+        if not np.all(np.isfinite(r)):
+            return np.full(3*n, BIG, dtype=float)
+        return r
+
+    res = least_squares(resid, p0, loss="soft_l1")
+    p_opt = res.x
+
+    # compute chi2 from weighted residuals (or unweighted if no sigmas)
+    r = resid(p_opt)
+    chi2 = np.sum(r**2)
+    ddof = len(p_opt)
+    dof = max(len(r) - ddof, 1)
+    chi2_red = chi2 / dof
+
+    # optional: per-dim R2 for sanity / label tie-breaks
+    xp, yp, zp = helix_xyz(s, p_opt)
+    mx = regression_metrics(x, xp, sigma=sig_x, ddof=ddof if sig_x is not None else 0)
+    my = regression_metrics(y, yp, sigma=sig_y, ddof=ddof if sig_y is not None else 0)
+    mz = regression_metrics(z, zp, sigma=sig_z, ddof=ddof if sig_z is not None else 0)
+
+    metrics_xyz = {
+        "chi2": chi2,
+        "chi2_red": chi2_red,
+        "mx": mx, "my": my, "mz": mz,
+    }
+    return p_opt, metrics_xyz
 
 def r2_score_1d(y_true, y_pred):
     """
@@ -222,7 +309,7 @@ def template_to_latex_with_s(template_or_expr):
     expr_latex = expr_latex.replace("x_{0}", "s").replace("x0", "s")
     return expr_latex
 
-def make_parametric_template(expr, s_name="x0"):
+def make_parametric_template(expr, s_name="s"):
     """
     Take a SymPy expression with numeric floats and one input symbol (x0),
     and return a parametric template where each float is replaced by a_i.
@@ -445,25 +532,29 @@ if __name__ == '__main__':
     create_dataset = True
     TEMPLATE_PATH = "track_templates.pkl"
     ADD_FUNC_TO_TEMPLATES = True
-    track_dataset_idx = 0
-    out_html = ["v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html", "v1_noiseless_69000.html", "v20260128_185949__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html"]
+    
+    track_dataset_idx = 1
+    out_html = [
+        "v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html",
+        "v1_noiseless_69000.html",
+        "v20260128_185949__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html"
+    ]
     track_folder = [f"../tracks_for_ed/{i[:-5]}" for i in out_html]
     out_html = out_html[track_dataset_idx]
     track_folder = track_folder[track_dataset_idx]
-    track_folder = ["../tracks_for_ed/v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01/", "../tracks_for_ed/v1_noiseless_69000/"][track_dataset_idx]
-    
     dataset_labels = [
         "v20260122_163839 train/test (noise XY=0.01, Z=0.01)",
         "v1_noiseless_69000 (no sigma columns)",
-        "
+        "v20260122_163839 train/test (noise XY=0.01, Z=0.01) Standard Model"
     ]
     dataset_label = dataset_labels[track_dataset_idx]
+    is_standard_model_dataset = ("standardModel" in out_html)
     
     outfile_str = out_html[:-5]
     R2_THRESHOLD = 0.997
     RunPySR = False   # Whether to enable (True) or disable (False) PySR discovery
     MaxPySRIters = 100
-    num_tracks = 5
+    num_tracks = 100
     
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
@@ -617,9 +708,10 @@ if __name__ == '__main__':
         plot_func=None,          # callable for plotting-only mode
         fitPlotFunc=False,
         fit_expr=None,           # SymPy expr (with float seeds) for fitting mode
-        s_name="x0",
+        s_name="s",
         sigma=None,
-        coord="x"
+        coord="x",
+        ylim = None
     ):
         stubborn_track_dataset = np.hstack((X.reshape(-1,1), Y.reshape(-1,1)))
         assert stubborn_track_dataset.shape[0] == X.shape[0]
@@ -648,6 +740,10 @@ if __name__ == '__main__':
                 metrics, p_opt, expr_fitted, y_pred = fit_template_to_data(
                     template, s_data, y_true, sigma=sigma
                 )
+                s_latex = sp.Symbol("s")  # for printing
+                expr_for_latex = round_floats(expr_fitted.xreplace({template["s_sym"]: s_latex}), 3)
+                
+                latex_eqn = f"${sp.latex(expr_for_latex)}$"
 
                 # plot fitted curve
                 f_plot = sp.lambdify((template["s_sym"],), expr_fitted, "numpy")
@@ -697,6 +793,8 @@ if __name__ == '__main__':
                     s_vals, f_plot(s_vals),
                     label=fr"Fit (template): $R^2={metrics['R2']:.3f}$" + "\n" + latex_eqn,
                 )
+                if ylim:
+                    plt.ylim(*ylim)
 
                 print("Fitted params:", p_opt)
                 print("Fitted expr:", expr_fitted)
@@ -710,6 +808,8 @@ if __name__ == '__main__':
                         s_vals, plot_func(s_vals),
                         label=fr"Fit: $R^2={R2:.3f}$" + ("\n" + latex_eqn if latex_eqn else ""),
                     )
+                    if ylim:
+                        plt.ylim(*ylim)
 
             plt.xlabel("s")
             plt.ylabel("z")
@@ -720,17 +820,17 @@ if __name__ == '__main__':
     if create_dataset:
         base_path = "../stubborn_track_csvs"
         track_number = 39
+        assert(track_number <= num_tracks)
         file_path = f"{base_path}/event10000000{track_number}-hits_X.csv"
         coord = file_path[-5].lower()
-#        file_path = ""
-#        plot_func = lambda x0: (-34.520199 * np.sech((np.sqrt(9.030267) - (x0 ** -1.453420))))
-#        plot_func_eqn = r"$z(s) = - 34.52 \operatorname{sech}{\left(s^{-1.45} - 3.01 \right)}$"
-        x0 = sp.Symbol("x0")
-        
-        plot_func = (sp.Float(28.651600) - (sp.Float(19.777920439906723) ** sp.cos((sp.exp(sp.Float(2.730276)) * x0))))
-        plot_func_eqn = r"$z(s) = 27.287 - 8.549\cdot\cos(13.842\cdot\mathrm{asin}(x))$"
-        create_stubborn_track_dataset(S[track_number-1], X[track_number-1], file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = True, coord = coord)
-        
+        s = sp.Symbol("s")
+        print(len(S))
+        fitPlotFunc = True
+        np.asin = np.arcsin; np.acos = np.arccos;
+        plot_func = -0.064285**sp.cos(14.318483**(s**0.637718)) + 13.961638*sp.sin(11.924012*2**sp.asin(s)) - sp.sin(27.3082328360165*sp.asin(s**0.733265) - 30.7069062618558) + sp.asin(sp.cos(s/(0.870774 - s))) + 31.099742 - 0.821144/(s + 0.040581) + 0.136113555969441 * (0.998597 - 1.13184269650204*sp.acos(s)) / ((0.998597 - 1.13184269650204*sp.acos(s))**2 + 1e-3**2) if fitPlotFunc else lambda s: ((((((4 * (-0.205286 / (0.040581 + s))) + (31.099742 - (0.064285 ** np.cos((14.318483 ** (s ** 0.637718)))))) + (13.961638 * np.sin((11.924012 * (2 ** np.asin(s)))))) + np.asin(np.cos((s / (0.870774 - s))))) - np.sin(((np.asin((s ** 0.733265)) - 1.124456) / 0.03661899347368653))) + (np.log(1.145812) / (0.998597 - (np.acos(s) / 0.883515))))
+        plot_func_eqn = r"$z(s) = - {0.06}^{\cos{\left({14.32}^{x_{0}^{0.64}} \right)}} + 13.96 \sin{\left(11.92 \cdot 2^{\operatorname{asin}{\left(x_{0} \right)}} \right)} - \sin{\left(27.31 \operatorname{asin}{\left(x_{0}^{0.73} \right)} - 30.71 \right)} + \operatorname{asin}{\left(\cos{\left(\frac{x_{0}}{0.87 - x_{0}} \right)} \right)} + 31.1 - \frac{0.82}{x_{0} + 0.04} + \frac{0.14}{1.0 - 1.13 \operatorname{acos}{\left(x_{0} \right)}}$".replace("x_{0}","s")
+        print(*zip(S[track_number-1][:], X[track_number-1][:]), sep = '\n')
+        create_stubborn_track_dataset(S[track_number-1][:], X[track_number-1][:], file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-50, 75))
 
     model_kwargs = dict(
         niterations=100,
@@ -876,7 +976,7 @@ if __name__ == '__main__':
 
             expr = model.sympy()
 
-            template = make_parametric_template(expr, s_name="x0")
+            template = make_parametric_template(expr, s_name="s")
             templates.append(template)
             new_template_index = len(templates) - 1
 
@@ -933,6 +1033,14 @@ if __name__ == '__main__':
             expr_y, m_y = fit_dimension(s_all, y_all, y_templates, y_eqns, families_y, "y", sigma=sig_y)
             expr_z, m_z = fit_dimension(s_all, z_all, z_templates, z_eqns, families_z, "z", sigma=sig_z)
 
+        sm_popt = None
+        sm_metrics = None
+        if is_standard_model_dataset:
+            sm_popt, sm_metrics = fit_standard_model_helix(
+                s_all, x_all, y_all, z_all,
+                sig_x=sig_x, sig_y=sig_y, sig_z=sig_z
+            )
+
         # Store R^2 values for summaries
         r2_x_all.append(m_x["R2"])
         r2_y_all.append(m_y["R2"])
@@ -961,6 +1069,10 @@ if __name__ == '__main__':
         x_pred = fx(s_plot)
         y_pred = fy(s_plot)
         z_pred = fz(s_plot)
+        
+        if is_standard_model_dataset and sm_popt is not None:
+            x_sm, y_sm, z_sm = helix_xyz(s_plot, sm_popt)
+            chi2nu_sm = sm_metrics["chi2_red"]
 
         fig, axes = plt.subplots(3, 1, figsize=(9, 10), sharex=True)
 
@@ -972,6 +1084,13 @@ if __name__ == '__main__':
            fr"$\chi^2_\nu={m_x['chi2_red']:.3e}$" + "\n" + eq_x)
         plot_points(axes[0], s_all, x_all, sig_x, label="Data")
         axes[0].plot(s_plot, x_pred, linewidth=2, label=label_x)
+        if is_standard_model_dataset and sm_popt is not None:
+            axes[0].plot(
+                s_plot, x_sm,
+                linewidth=2,
+                linestyle="--",
+                label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$"
+            )
         axes[0].set_ylabel("$x$")
         axes[0].legend(fontsize=8)
 
@@ -983,6 +1102,8 @@ if __name__ == '__main__':
            fr"$\chi^2_\nu={m_y['chi2_red']:.3e}$" + "\n" + eq_y)
         plot_points(axes[1], s_all, y_all, sig_y, label="Data")
         axes[1].plot(s_plot, y_pred, linewidth=2, label=label_y)
+        if is_standard_model_dataset and sm_popt is not None:
+            axes[1].plot(s_plot, y_sm, linewidth=2, linestyle="--", label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$")
         axes[1].set_ylabel("$y$")
         axes[1].legend(fontsize=8)
 
@@ -994,6 +1115,8 @@ if __name__ == '__main__':
            fr"$\chi^2_\nu={m_z['chi2_red']:.3e}$" + "\n" + eq_z)
         plot_points(axes[2], s_all, z_all, sig_z, label="Data")
         axes[2].plot(s_plot, z_pred, linewidth=2, label=label_z)
+        if is_standard_model_dataset and sm_popt is not None:
+            axes[2].plot(s_plot, z_sm, linewidth=2, linestyle="--", label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$")
         axes[2].set_ylabel("$z$")
         axes[2].set_xlabel("$s$")
         axes[2].legend(fontsize=8)
