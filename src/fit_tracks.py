@@ -11,6 +11,23 @@ from os import system
 import json
 import re
 import pandas as pd
+import math
+
+def _fmt_float_latex(x: float, sig: int = 3, sci_cut: float = 1e-3) -> str:
+    """Return latex for a float. Use scientific notation if |x| < sci_cut and x != 0."""
+    if x == 0.0:
+        return "0"
+    ax = abs(x)
+    if ax < sci_cut:
+        # scientific notation with sig significant digits
+        exp = int(math.floor(math.log10(ax)))
+        coeff = x / (10**exp)
+        coeff_str = f"{coeff:.{sig-1}f}".rstrip("0").rstrip(".")
+        return rf"{coeff_str}\times 10^{{{exp}}}"
+    else:
+        # fixed with sig decimal places (not sig figs)
+        s = f"{x:.{sig}f}".rstrip("0").rstrip(".")
+        return s
 
 def parse_event_number(f_tag: str) -> int:
     """
@@ -89,7 +106,100 @@ def regression_metrics(y_true, y_pred, *, sigma=None, ddof=0, eps=1e-12):
     chi2_red = chi2 / dof
 
     return {"R2": R2, "MSE": MSE, "MAE": MAE, "chi2": chi2, "chi2_red": chi2_red}
-    
+
+def fit_circle_xy(x, y):
+    x = np.asarray(x).ravel()
+    y = np.asarray(y).ravel()
+
+    xc0, yc0 = np.mean(x), np.mean(y)
+    R0 = np.median(np.sqrt((x-xc0)**2 + (y-yc0)**2))
+    p0 = np.array([xc0, yc0, R0], float)
+
+    def resid(p):
+        xc, yc, R = p
+        return np.sqrt((x-xc)**2 + (y-yc)**2) - R
+
+    res = least_squares(resid, p0, loss="linear")
+    return res.x  # xc, yc, R
+
+def fit_z_vs_phase(phi_c, z, *, sig_z=None):
+    phi_c = np.asarray(phi_c).ravel()
+    z = np.asarray(z).ravel()
+
+    # z ≈ z0 + a*(phi - phi_ref)  <=>  z = b + a*phi  where b = z0 - a*phi_ref
+    A = np.vstack([np.ones_like(phi_c), phi_c]).T
+
+    if sig_z is None:
+        b, a = np.linalg.lstsq(A, z, rcond=None)[0]
+    else:
+        w = 1.0 / (np.asarray(sig_z).ravel() + 1e-12)
+        Aw = A * w[:, None]
+        zw = z * w
+        b, a = np.linalg.lstsq(Aw, zw, rcond=None)[0]
+
+    # choose phi_ref = first phi so z0 is "at first hit"
+    phi_ref = phi_c[0]
+    z0 = b + a*phi_ref
+    return z0, a, phi_ref
+
+def helix_xyz_phi(phi, p):
+    # p = [xc, yc, R, z0, a, phi_ref]
+    xc, yc, R, z0, a, phi_ref = p
+    x = xc + R * np.cos(phi)
+    y = yc + R * np.sin(phi)
+    z = z0 + a * (phi - phi_ref)
+    return x, y, z
+
+def fit_standard_model_helix_from_phi(phi, x, y, z, *, sig_x=None, sig_y=None, sig_z=None):
+    phi = np.asarray(phi).ravel()
+    x = np.asarray(x).ravel()
+    y = np.asarray(y).ravel()
+    z = np.asarray(z).ravel()
+    n = len(phi)
+
+    # initial guesses (robust)
+    xc0, yc0 = np.mean(x), np.mean(y)
+    R0 = np.median(np.sqrt((x - xc0)**2 + (y - yc0)**2))
+    z00 = np.mean(z)
+    a0 = (z[-1] - z[0]) / (phi[-1] - phi[0] + 1e-12)
+    phi_ref0 = phi[0]
+    p0 = np.array([xc0, yc0, R0, z00, a0, phi_ref0], dtype=float)
+
+    BIG = 1e6
+    def resid(p):
+        xp, yp, zp = helix_xyz_phi(phi, p)
+        rx = xp - x
+        ry = yp - y
+        rz = zp - z
+        if sig_x is not None: rx = rx / (np.asarray(sig_x).ravel() + 1e-12)
+        if sig_y is not None: ry = ry / (np.asarray(sig_y).ravel() + 1e-12)
+        if sig_z is not None: rz = rz / (np.asarray(sig_z).ravel() + 1e-12)
+        r = np.concatenate([rx, ry, rz])
+        if not np.all(np.isfinite(r)): return np.full(3*n, BIG, dtype=float)
+        return r
+
+    # Use linear loss so residuals correspond to chi2
+    res = least_squares(resid, p0, loss="linear", xtol=1e-10, ftol=1e-10)
+    p_opt = res.x
+
+    r = resid(p_opt)
+    chi2 = float(np.sum(r**2))
+    ddof = len(p_opt)
+    dof = max(len(r) - ddof, 1)
+    chi2_red = chi2 / dof
+
+    # simple residual diagnostics
+    xp, yp, zp = helix_xyz_phi(phi, p_opt)
+    res_xyz = np.concatenate([xp - x, yp - y, zp - z])
+    diagnostics = {
+        "chi2": chi2, "chi2_red": chi2_red,
+        "res_mean": np.mean(res_xyz), "res_std": np.std(res_xyz),
+        "p_opt": p_opt, "success": res.success, "message": res.message
+    }
+    return p_opt, diagnostics
+# -------------------------------------------------------------------
+
+
 def helix_xyz(s, p):
     """
     Simple 3D helix parametrized by s:
@@ -104,7 +214,6 @@ def helix_xyz(s, p):
     y = yc + R * np.sin(th)
     z = z0 + k * s
     return x, y, z
-
 
 def fit_standard_model_helix(s, x, y, z, *, sig_x=None, sig_y=None, sig_z=None):
     """
@@ -236,64 +345,158 @@ def load_sigmas_for_event(track_folder: str, event_num: int):
 
     return sig_x, sig_y, sig_z, n_hits
 
-def fit_until_both_conditions(s, y, model_kwargs, R2_THRESHOLD, min_iters=100, step=50, max_iters=np.inf, stop_flag_path="STOP_PYSR"):
+def sympy_expr_to_pysr_guess(expr, *, pysr_var="x0"):
     """
-    Continue training PySR until BOTH:
-      - R^2 >= R2_THRESHOLD
-      - total iterations >= min_iters
-    Training stops if max_iters is reached.
+    Convert a SymPy expression (with numeric constants) into a PySR guess string.
+    Assumes your independent variable is the only free symbol in expr.
     """
+    expr = sp.sympify(expr)
 
+    free = list(expr.free_symbols)
+    if len(free) != 1:
+        raise ValueError(f"Expected 1 free symbol in expr for PySR guess; got {free}")
+
+    # rename that symbol to x0 so PySR understands it
+    expr = expr.xreplace({free[0]: sp.Symbol(pysr_var)})
+
+    s = sp.sstr(expr).replace("**", "^")
+    # --- avoid unary minus at the start (PySR parser can choke if '-' not in unary ops) ---
+    s_strip = s.lstrip()
+    if s_strip.startswith("-"):
+        # turn "-(...)" or "-x0*..." into "0-(...)" which uses binary '-'
+        s = "0" + s
+
+    # also normalize "+ -something" into "- something" (binary minus)
+    s = s.replace("+ -", "- ")
+    return s
+
+def _chi2_red(y, yhat, sigma, k_params=0):
+    r = (y - yhat) / sigma
+    chi2 = float(np.sum(r*r))
+    dof = max(1, len(y) - k_params)
+    return chi2 / dof
+
+def _estimate_num_params(model):
+    """
+    Best-effort estimate of number of fitted constants.
+    For PySR, the hall-of-fame includes 'n_params' sometimes, but not always.
+    We fall back to counting 'C' constants in sympy or just 0.
+    """
+    try:
+        # PySR typically provides get_best() / sympy() depending on version
+        # safest: model.get_best() returns a dict with 'sympy_format'
+        best = model.get_best()
+        if isinstance(best, dict):
+            # recent PySR often includes 'num_params' or similar
+            for key in ("num_params", "n_params", "nconstants", "complexity"):
+                if key in best and isinstance(best[key], (int, np.integer)):
+                    # NOTE: 'complexity' is NOT params, so only use if you know your schema
+                    pass
+            if "n_params" in best:
+                return int(best["n_params"])
+        # fallback: 0
+    except Exception:
+        pass
+    return 0
+
+def fit_until_both_conditions(
+    s, y, model_kwargs,
+    R2_THRESHOLD,
+    min_iters=100, step=50, max_iters=np.inf,
+    stop_flag_path="STOP_PYSR",
+    sigma=None,
+    CHI2_TOL=0.2,   # e.g. stop if |chi2_red-1| <= 0.2
+    require_both=True  # if True: weighted -> require chi2 AND R2; else just chi2
+):
     model = PySRRegressor(**model_kwargs)
     total_iters = 0
-    best_R2 = 0
-    R2 = best_R2
+    best_R2 = -np.inf
+    best_chi2 = np.inf
+
+    y = np.asarray(y).ravel()
+    s = np.asarray(s)
+
+    weighted = sigma is not None
+    if weighted:
+        sigma = np.asarray(sigma).ravel()
+        assert sigma.shape == y.shape
 
     while True:
-        # Run more iterations *without resetting the model*
         model.niterations = total_iters + step
+        # NOTE: PySR supports sample weights via `weights=` in many versions.
+        # If your version supports it, use: model.fit(s, y, weights=1/sigma**2)
         model.fit(s, y)
+
         total_iters += step
 
-        # Compute R^2
+        # Predictions
+        yhat = model.predict(s)
+
+        # R² (unweighted unless you implement weighted R²)
         R2 = model.score(s, y)
         if R2 > best_R2:
             best_R2 = R2
-            print(f"New best R2 = {R2:.3f}")
+            print(f"New best R2 = {best_R2:.3f}")
 
-        # --- stopping conditions ---
+        # chi2_red (only if weighted)
+        if weighted:
+            k = _estimate_num_params(model)  # best-effort
+            chi2_red = _chi2_red(y, yhat, sigma, k_params=k)
+            if abs(chi2_red - 1.0) < abs(best_chi2 - 1.0):
+                best_chi2 = chi2_red
+                print(f"New best chi2_red = {best_chi2:.3f}")
 
-        # (1) Desired accuracy + min_iters satisfied
-        if total_iters >= min_iters and best_R2 >= R2_THRESHOLD:
-            print(f"[fit_until_both_conditions] Reached R^2 >= {R2_THRESHOLD} with {total_iters} iterations.")
-            break
+        # stopping
+        if total_iters >= min_iters:
+            if weighted:
+                chi2_ok = abs(best_chi2 - 1.0) <= CHI2_TOL
+                r2_ok = best_R2 >= R2_THRESHOLD
+                if (chi2_ok and r2_ok) if require_both else chi2_ok:
+                    print(f"[fit_until_both_conditions] Stop: iters={total_iters}, best_R2={best_R2:.3f}, best_chi2_red={best_chi2:.3f}")
+                    break
+            else:
+                if best_R2 >= R2_THRESHOLD:
+                    print(f"[fit_until_both_conditions] Reached R^2 >= {R2_THRESHOLD} with {total_iters} iterations.")
+                    break
 
-        # (2) Hard max iterations
         if total_iters >= max_iters:
-            print(f"[fit_until_both_conditions] Reached max_iters={max_iters} with best R^2={best_R2:.3f}.")
+            if weighted:
+                print(f"[fit_until_both_conditions] Reached max_iters={max_iters} with best_R2={best_R2:.3f}, best_chi2_red={best_chi2:.3f}.")
+            else:
+                print(f"[fit_until_both_conditions] Reached max_iters={max_iters} with best_R2={best_R2:.3f}.")
             break
 
-        # (3) External stop flag
         if os.path.exists(stop_flag_path):
             print(f"[fit_until_both_conditions] Stop flag '{stop_flag_path}' detected; aborting this fit.")
-            # Remove the flag so future dimensions/tracks can run fresh
             os.remove(stop_flag_path)
             break
 
-    system("rm *hall_of_fame*")
+    system("rm -f *hall_of_fame*")
     return model, best_R2, total_iters
 
-def sympy_to_latex_with_s(expr):
-    """Return a LaTeX string with rounded floats and x0→s replacement."""
-    # Round floats first
-    expr = round_floats(expr, 3)
 
-    # Convert to LaTeX
+def sympy_to_latex_with_s(expr, *, ndigits=3, sci_cut=1e-3):
+    """LaTeX with x0→s replacement and scientific notation for tiny floats."""
+    # Convert to latex first
     expr_latex = sp.latex(expr)
 
-    # Replace PySR variable name with s
+    # Replace variable name
     expr_latex = expr_latex.replace("x_{0}", "s").replace("x0", "s")
 
+    # Replace numeric literals in latex string.
+    # This regex targets numbers like -1.79122404979219e-5 or 0.2822120814
+    import re
+    number_re = re.compile(r'(?<![A-Za-z])([-+]?\d+(\.\d+)?([eE][-+]?\d+)?)(?![A-Za-z])')
+
+    def repl(m):
+        token = m.group(1)
+        try:
+            x = float(token)
+        except Exception:
+            return token
+        return _fmt_float_latex(x, sig=ndigits, sci_cut=sci_cut)
+
+    expr_latex = number_re.sub(repl, expr_latex)
     return expr_latex
 
 def template_to_latex_with_s(template_or_expr):
@@ -385,9 +588,20 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None):
 
         return r
 
+    # If there are no parameters, don't call least_squares
+    if len(param_syms) == 0:
+        with np.errstate(all="ignore"):
+            y_pred = f(s_data)   # <-- call f with ONLY s_data
+
+        # guard like you do elsewhere
+        if (not np.all(np.isfinite(y_pred))) or np.any(np.iscomplex(y_pred)):
+            y_pred = np.full_like(y_data, np.nan, dtype=float)
+
+        metrics = regression_metrics(y_data, y_pred, sigma=sigma, ddof=0)
+        return metrics, np.array([]), expr_param, y_pred
+
     # Nonlinear least squares (robust loss helps too)
     res = least_squares(residuals, p0, loss="soft_l1")
-
     p_opt = res.x
     y_pred = f(s_data, *p_opt)
 
@@ -524,20 +738,25 @@ def summarize_3d_families(families_x, families_y, families_z, r2_x_all, r2_y_all
     return latex_table_3d, triple_id_map
 
 if __name__ == '__main__':
-    # Fix random seed
-    np.random.seed(0)
+    np.random.seed(0)  # Fix random seed
     np.sech = lambda x: 1/np.cosh(x)
     OPEN_PNGS = False
     OPEN_HTML = True
     create_dataset = True
     TEMPLATE_PATH = "track_templates.pkl"
     ADD_FUNC_TO_TEMPLATES = True
+    R2_THRESHOLD = 0.997
+    RunPySR = True   # Whether to enable (True) or disable (False) PySR discovery
+    MaxPySRIters = 100
+    num_tracks = 5
+    loaded = {}
+    x_templates, y_templates, z_templates = [], [], []
     
-    track_dataset_idx = 1
+    track_dataset_idx = 0
     out_html = [
         "v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html",
         "v1_noiseless_69000.html",
-        "v20260128_185949__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html"
+        "v20260202_142140__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html"
     ]
     track_folder = [f"../tracks_for_ed/{i[:-5]}" for i in out_html]
     out_html = out_html[track_dataset_idx]
@@ -545,19 +764,12 @@ if __name__ == '__main__':
     dataset_labels = [
         "v20260122_163839 train/test (noise XY=0.01, Z=0.01)",
         "v1_noiseless_69000 (no sigma columns)",
-        "v20260122_163839 train/test (noise XY=0.01, Z=0.01) Standard Model"
+        "v20260202_142140 train/test (noise XY=0.01, Z=0.01) Standard Model"
     ]
     dataset_label = dataset_labels[track_dataset_idx]
     is_standard_model_dataset = ("standardModel" in out_html)
     
     outfile_str = out_html[:-5]
-    R2_THRESHOLD = 0.997
-    RunPySR = False   # Whether to enable (True) or disable (False) PySR discovery
-    MaxPySRIters = 100
-    num_tracks = 100
-    
-    loaded = {}
-    x_templates, y_templates, z_templates = [], [], []
     
     if os.path.exists(TEMPLATE_PATH):
         print("Loading existing template library...")
@@ -571,134 +783,18 @@ if __name__ == '__main__':
     else:
         print("No template file found — starting with empty template lists.")
     
-    if not loaded:
-        # ------------------------------------------------------------------
-        # Seed templates from previously discovered families (second run)
-        # ------------------------------------------------------------------
-        s = sp.Symbol("s")  # we'll use 's' as the parameter and pass s_name="s"
-        
-        # ---------- Family 0 ----------
-        expr0_x = -360.982 * (0.589 - sp.tanh(s)) * sp.tanh(s)
-        expr0_y = 57.471 * s * sp.sin(sp.exp(s))
-        expr0_z = 1.234 * sp.exp(sp.exp(sp.sin(8.9 * sp.sqrt(sp.exp(-s)))))
-
-        # ---------- Family 1 ----------
-        expr1_x = -151.324 * (0.888 - sp.tanh(s)) * sp.tanh(s)
-        expr1_y = -54.3 * s * sp.tanh(s + s) + 0.828
-        expr1_z = (-57.035 * s - 85.784) * sp.tanh(s)
-
-        # ---------- Family 2 ----------
-        expr2_x = -370.298 * (0.689 - sp.tanh(s)) * sp.tanh(s)
-        expr2_y = 40.612 * s * sp.cos(6.177 * s) + 6.676
-        expr2_z = -28.139 * s * sp.exp(sp.sin(11.717 * sp.sqrt(s)))
-
-        # ---------- Family 3 ----------
-        expr3_x = -sp.sinh(2.394 * s + 1.852)
-        expr3_y = 22.687 * sp.exp(sp.sin(s + sp.sin(s))) - 19.796
-        expr3_z = (33.104 - 36.305 * s) * sp.tanh(s)
-
-        # ---------- Family 4 ----------
-        expr4_x = 4.877 * sp.sinh(sp.sin(s + sp.exp(s) + 5.836))
-        expr4_y = 48.752 * s * sp.tanh(s + s) + 7.586
-        expr4_z = -8.01 * sp.sin(sp.sin(2.691 * s)) - 1.697
-
-        # Build parametric templates (replace floats with a0, a1, ...)
-        first_run_x_templates = [
-            make_parametric_template(expr0_x, s_name="s"),
-            make_parametric_template(expr1_x, s_name="s"),
-            make_parametric_template(expr2_x, s_name="s"),
-            make_parametric_template(expr3_x, s_name="s"),
-            make_parametric_template(expr4_x, s_name="s"),
-        ]
-
-        first_run_y_templates = [
-            make_parametric_template(expr0_y, s_name="s"),
-            make_parametric_template(expr1_y, s_name="s"),
-            make_parametric_template(expr2_y, s_name="s"),
-            make_parametric_template(expr3_y, s_name="s"),
-            make_parametric_template(expr4_y, s_name="s"),
-        ]
-
-        first_run_z_templates = [
-            make_parametric_template(expr0_z, s_name="s"),
-            make_parametric_template(expr1_z, s_name="s"),
-            make_parametric_template(expr2_z, s_name="s"),
-            make_parametric_template(expr3_z, s_name="s"),
-            make_parametric_template(expr4_z, s_name="s"),
-        ]
-
-        x_templates.extend(first_run_x_templates)
-        y_templates.extend(first_run_y_templates)
-        z_templates.extend(first_run_z_templates)
-
-        # ----- Family 0 -----
-        expr0_x = 2.628 - 37.513*sp.sin(4.603*s)
-        expr0_y = 22.332*sp.exp(sp.sin(2.207*s)) - 24.108
-        expr0_z = 7.739*sp.exp(sp.sin(5.757*s)) - 1.917
-
-        # ----- Family 1 -----
-        expr1_x = -23.895*sp.sin(2.88*s) - 6.149
-        expr1_y = 53.5 - 49.255*sp.exp(sp.sin(0.846*s))
-        expr1_z = -109.225*s*sp.cos(sp.sin(s) - 0.721)
-
-        # ----- Family 2 -----
-        expr2_x = 3.977*sp.sin(3.74*s) + 1.945
-        expr2_y = 32.506*sp.exp(sp.sin(1.173*s)) - 29.209
-        expr2_z = s*(19.851*s - 23.241) - 1.718
-
-        # ----- Family 3 -----
-        expr3_x = -39.697*sp.sin(3.83*s) - 3.123
-        expr3_y = 17.313 - 31.212*sp.sin(9.241*sp.cos(s))
-        expr3_z = -23.95*s*sp.exp(-sp.sin(9.372*s))
-
-        # ----- Family 4 -----
-        expr4_x = -sp.exp(3.494*s) - 3.929
-        expr4_y = 22.84*sp.exp(sp.sin(1.954*s)) - 19.851
-        expr4_z = 45.462*s*sp.cos(sp.sin(s) + 13.347)
-
-        # Build parametric templates (replace floats by a0, a1, ...)
-        second_run_x_templates = [
-            make_parametric_template(expr0_x, s_name="s"),
-            make_parametric_template(expr1_x, s_name="s"),
-            make_parametric_template(expr2_x, s_name="s"),
-            make_parametric_template(expr3_x, s_name="s"),
-            make_parametric_template(expr4_x, s_name="s"),
-        ]
-
-        second_run_y_templates = [
-            make_parametric_template(expr0_y, s_name="s"),
-            make_parametric_template(expr1_y, s_name="s"),
-            make_parametric_template(expr2_y, s_name="s"),
-            make_parametric_template(expr3_y, s_name="s"),
-            make_parametric_template(expr4_y, s_name="s"),
-        ]
-
-        second_run_z_templates = [
-            make_parametric_template(expr0_z, s_name="s"),
-            make_parametric_template(expr1_z, s_name="s"),
-            make_parametric_template(expr2_z, s_name="s"),
-            make_parametric_template(expr3_z, s_name="s"),
-            make_parametric_template(expr4_z, s_name="s"),
-        ]
-        
-        x_templates.extend(second_run_x_templates)
-        y_templates.extend(second_run_y_templates)
-        z_templates.extend(second_run_z_templates)
-        
-        
-        
-        
-        z_templates.append(make_parametric_template((((((0.508292 ** (-5.130599 + sp.cos((s * 7.306336)))) * (-0.622545 + sp.sech((-2.263896 - (-11.663861 * s))))) + sp.cos((4 ** (2.492631 - s)))) + ((0.987333 + s) ** -72.499292)) + sp.cos((sp.sin(s) / sp.exp(-3.515159)))), s_name="s"))
 #        z_templates.append(make_parametric_template(-34.520199*sp.sech(s**(-1.45342) - 3.00504026595319), s_name="s"))
     track_infos = []  # store per-track info for HTML
     x_eqns, y_eqns, z_eqns = [], [], []   # store final numeric expressions used
     families_x, families_y, families_z = [], [], []  # indices of template used
     r2_x_all, r2_y_all, r2_z_all = [], [], [] # R^2 values for each track and coordinate
 
-    S, X, Y, Z, F = load_many_tracks(track_folder, max_tracks=num_tracks)
+    # now load sigma arrays too
+    S, X, Y, Z, SIG_X_LIST, SIG_Y_LIST, SIG_Z_LIST, F = load_many_tracks(track_folder, max_tracks=num_tracks)
     num_tracks = len(S)
     assert((len(S), len(X), len(Y), len(Z), len(F)) == (num_tracks, num_tracks, num_tracks, num_tracks, num_tracks))
 #    print(f"len(S), len(X), len(Y), len(Z), len(F) = {(len(S), len(X), len(Y), len(Z), len(F))}")
+#    print(SIG_X_LIST[0], SIG_Y_LIST[0], SIG_Z_LIST[0]); exit()
     
     def create_stubborn_track_dataset(
         X, Y,
@@ -819,23 +915,25 @@ if __name__ == '__main__':
     
     if create_dataset:
         base_path = "../stubborn_track_csvs"
-        track_number = 39
+        track_number = 3
         assert(track_number <= num_tracks)
-        file_path = f"{base_path}/event10000000{track_number}-hits_X.csv"
+        file_path = f"{base_path}/{out_html[:-5]}event10000000{track_number}-hits_Z.csv"
         coord = file_path[-5].lower()
         s = sp.Symbol("s")
         print(len(S))
-        fitPlotFunc = True
+        fitPlotFunc = False
         np.asin = np.arcsin; np.acos = np.arccos;
-        plot_func = -0.064285**sp.cos(14.318483**(s**0.637718)) + 13.961638*sp.sin(11.924012*2**sp.asin(s)) - sp.sin(27.3082328360165*sp.asin(s**0.733265) - 30.7069062618558) + sp.asin(sp.cos(s/(0.870774 - s))) + 31.099742 - 0.821144/(s + 0.040581) + 0.136113555969441 * (0.998597 - 1.13184269650204*sp.acos(s)) / ((0.998597 - 1.13184269650204*sp.acos(s))**2 + 1e-3**2) if fitPlotFunc else lambda s: ((((((4 * (-0.205286 / (0.040581 + s))) + (31.099742 - (0.064285 ** np.cos((14.318483 ** (s ** 0.637718)))))) + (13.961638 * np.sin((11.924012 * (2 ** np.asin(s)))))) + np.asin(np.cos((s / (0.870774 - s))))) - np.sin(((np.asin((s ** 0.733265)) - 1.124456) / 0.03661899347368653))) + (np.log(1.145812) / (0.998597 - (np.acos(s) / 0.883515))))
-        plot_func_eqn = r"$z(s) = - {0.06}^{\cos{\left({14.32}^{x_{0}^{0.64}} \right)}} + 13.96 \sin{\left(11.92 \cdot 2^{\operatorname{asin}{\left(x_{0} \right)}} \right)} - \sin{\left(27.31 \operatorname{asin}{\left(x_{0}^{0.73} \right)} - 30.71 \right)} + \operatorname{asin}{\left(\cos{\left(\frac{x_{0}}{0.87 - x_{0}} \right)} \right)} + 31.1 - \frac{0.82}{x_{0} + 0.04} + \frac{0.14}{1.0 - 1.13 \operatorname{acos}{\left(x_{0} \right)}}$".replace("x_{0}","s")
-        print(*zip(S[track_number-1][:], X[track_number-1][:]), sep = '\n')
-        create_stubborn_track_dataset(S[track_number-1][:], X[track_number-1][:], file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-50, 75))
+        plot_func = s/(sp.cos(sp.sqrt(s)) - 2.2661800709136) + 2.345027 if fitPlotFunc else lambda s: s/(np.cos(np.sqrt(s)) - 2.2661800709136) + 2.345027
+        plot_func_eqn = r"$z(s) = \frac{s}{\cos{\left(\sqrt{s} \right)} - 2.27} + 2.35$".replace("x_{0}","s")
+#        plot_func = None
+#        plot_func_eqn = None
+        print(*zip(S[track_number-1][:], Z[track_number-1][:]), sep = '\n')
+        create_stubborn_track_dataset(S[track_number-1][:], Z[track_number-1][:], file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-200, 75))
 
     model_kwargs = dict(
         niterations=100,
         binary_operators=["+", "-", "*", "/", "^"],
-        unary_operators=["sin", "cos", "exp", "tanh", "sqrt", "log", "sech(x) = 1/cosh(x)"],
+        unary_operators=["neg", "sin", "cos", "exp", "tanh", "sqrt", "log", "sech(x) = 1/cosh(x)"],
         extra_sympy_mappings={"sech": lambda x: 1/sp.cosh(x)},
         maxsize=9,
         model_selection="accuracy",
@@ -863,7 +961,9 @@ if __name__ == '__main__':
                 label=label
             )
 
-    for track_idx, (s_all, x_all, y_all, z_all, f_all) in enumerate(zip(S, X, Y, Z, F)):
+    for track_idx, (s_all, x_all, y_all, z_all, f_all,
+                sigx_from_loader, sigy_from_loader, sigz_from_loader) in enumerate(
+                    zip(S, X, Y, Z, F, SIG_X_LIST, SIG_Y_LIST, SIG_Z_LIST)):
         s_all_reshaped = s_all.reshape(-1, 1)
 
         # --- Helper inner function to handle one coordinate --- #
@@ -912,6 +1012,7 @@ if __name__ == '__main__':
                         best_expr = expr_fitted
                         best_template_index = idx
 
+            print(f"[Track {track_idx} {coord_name}] best template = {best_expr}")
             # 2) If good enough, use best template
             if templates and best_metrics is not None:
                 if is_weighted():
@@ -964,19 +1065,58 @@ if __name__ == '__main__':
                 best_R2 = -np.inf if best_metrics is None else best_metrics["R2"]
                 print(f"best_R2 of {best_R2} is less than {R2_THRESHOLD}, running PYSR now.")
 
-            model, R2_final, iters = fit_until_both_conditions(
-                s_data.reshape(-1, 1),
-                y_data,
-                model_kwargs,
-                R2_THRESHOLD,
-                min_iters=100,
-                step=50,
-                max_iters=MaxPySRIters,
-            )
+            # --- Seed PySR with fitted template(s) as guesses ---
+            guesses = []
+
+            if best_expr is not None:
+                try:
+                    guesses.append(sympy_expr_to_pysr_guess(best_expr, pysr_var="x0"))
+                except Exception as e:
+                    print(f"[Track {track_idx} {coord_name}] Could not convert best_expr to PySR guess: {e}")
+
+            # Make a per-call copy of model_kwargs without rebinding the outer name
+            mk = dict(model_kwargs)   # <-- key change: NEW name
+            if guesses:
+                mk["guesses"] = guesses
+                print(f"[Track {track_idx} {coord_name}] PySR guesses = {guesses}")
+
+            # For weighted fits, stop based on chi2_red being near 1 (plus min_iters),
+            # and optionally ALSO require R2 >= threshold (I recommend not requiring both initially).
+            if is_weighted():
+                model, best_R2, iters = fit_until_both_conditions(
+                    s_data.reshape(-1, 1),
+                    y_data,
+                    mk,
+                    R2_THRESHOLD,              # keep it as a tie-break / info
+                    min_iters=100,
+                    step=50,
+                    max_iters=MaxPySRIters,
+                    sigma=sigma,               # <-- NEW
+                    CHI2_TOL=CHI2_RED_TOL,      # <-- NEW (same tolerance you use above)
+                    require_both=False,         # <-- NEW (stop on chi2_red band; R2 is just logged)
+                )
+            else:
+                model, best_R2, iters = fit_until_both_conditions(
+                    s_data.reshape(-1, 1),
+                    y_data,
+                    mk,
+                    R2_THRESHOLD,
+                    min_iters=100,
+                    step=50,
+                    max_iters=MaxPySRIters,
+                    sigma=None,                # explicit
+                )
 
             expr = model.sympy()
 
+            # --- normalize PySR's input symbol name to "s" ---
+            free_syms = list(expr.free_symbols)
+            if len(free_syms) != 1:
+                raise ValueError(f"PySR returned expr with free_symbols={free_syms}; expected exactly 1 input variable.")
+            expr = expr.subs({free_syms[0]: sp.Symbol("s")})
+
             template = make_parametric_template(expr, s_name="s")
+
             templates.append(template)
             new_template_index = len(templates) - 1
 
@@ -1011,35 +1151,94 @@ if __name__ == '__main__':
             families_list.append(new_template_index)
             return expr_fitted_new, metrics_new
 
-        # --- Fit x, y, z this track (use per-hit sigmas) --- #
-        event_num = parse_event_number(f_all)           # e.g. 100000001
-        sig_x, sig_y, sig_z, n_hits = load_sigmas_for_event(track_folder, event_num)
-        
-        if sig_x is None:
-            print(f"[info] event {event_num}: no sigma columns found → unweighted fits")
-        else:
-            print(f"[info] event {event_num}: sigma columns found → weighted fits")
+        # prefer sigmas coming from loader (these match the CSV file)
+        sig_x = sigx_from_loader
+        sig_y = sigy_from_loader
+        sig_z = sigz_from_loader
 
-        # sanity: lengths must match loaded arrays
+        # if loader returned None (old files without sigma cols), try the per-event loader as before
+        if sig_x is None:
+            event_num = parse_event_number(f_all)           # e.g. 100000001
+            sig_x, sig_y, sig_z, n_hits = load_sigmas_for_event(track_folder, event_num)
+        else:
+            n_hits = len(s_all)
+
+        if sig_x is None:
+            print(f"[info] event {f_all}: no sigma columns found → unweighted fits")
+        else:
+            print(f"[info] event {f_all}: sigma columns found → weighted fits")
+
+        # sanity: lengths must match loaded arrays (same check you had before)
         if len(s_all) != n_hits:
-            # defensive: if load_many_tracks filtered hits differently, warn and fall back to unweighted
             print(f"[warning] mismatch in hit counts for event {f_all}: s_len={len(s_all)}, csv_hits={n_hits}. Using unweighted fit.")
             expr_x, m_x = fit_dimension(s_all, x_all, x_templates, x_eqns, families_x, "x")
             expr_y, m_y = fit_dimension(s_all, y_all, y_templates, y_eqns, families_y, "y")
             expr_z, m_z = fit_dimension(s_all, z_all, z_templates, z_eqns, families_z, "z")
         else:
-            # If sigmas are None (old datasets), this is just unweighted.
             expr_x, m_x = fit_dimension(s_all, x_all, x_templates, x_eqns, families_x, "x", sigma=sig_x)
             expr_y, m_y = fit_dimension(s_all, y_all, y_templates, y_eqns, families_y, "y", sigma=sig_y)
             expr_z, m_z = fit_dimension(s_all, z_all, z_templates, z_eqns, families_z, "z", sigma=sig_z)
 
         sm_popt = None
         sm_metrics = None
+
+        sm_x = sm_y = sm_z = None
+        chi2nu_sm = None
+
         if is_standard_model_dataset:
-            sm_popt, sm_metrics = fit_standard_model_helix(
-                s_all, x_all, y_all, z_all,
-                sig_x=sig_x, sig_y=sig_y, sig_z=sig_z
-            )
+            # --- 1) fit circle in x–y to get helix center ---
+            xc0, yc0 = np.mean(x_all), np.mean(y_all)
+            R0 = np.median(np.sqrt((x_all - xc0)**2 + (y_all - yc0)**2))
+
+            def circle_resid(p):
+                xc, yc, R = p
+                return np.sqrt((x_all - xc)**2 + (y_all - yc)**2) - R
+
+            res_xy = least_squares(circle_resid, [xc0, yc0, R0], loss="soft_l1", f_scale=1.0)
+            xc_fit, yc_fit, R_fit = res_xy.x
+            print("circle RMS:", np.std(circle_resid([xc_fit, yc_fit, R_fit])))
+
+            # --- 2) compute phase about the fitted center (THIS is the generator phi) ---
+            phi_unwrap = np.unwrap(np.arctan2(y_all - yc_fit, x_all - xc_fit))
+
+            # --- 3) fit z vs phase: z = z0 + a*(phi - phi0) ---
+            A = np.vstack([np.ones_like(phi_unwrap), phi_unwrap]).T
+            if sig_z is None:
+                b, a = np.linalg.lstsq(A, z_all, rcond=None)[0]
+            else:
+                w = 1.0 / (sig_z + 1e-12)
+                Aw = A * w[:, None]
+                zw = z_all * w
+                b, a = np.linalg.lstsq(Aw, zw, rcond=None)[0]
+
+            phi0 = phi_unwrap[0]
+            z0 = b + a * phi0
+
+            # --- 4) build SM predictions at the HIT POINTS (no interpolation) ---
+            x_sm = xc_fit + R_fit * np.cos(phi_unwrap)
+            y_sm = yc_fit + R_fit * np.sin(phi_unwrap)
+            z_sm = z0 + a * (phi_unwrap - phi0)
+            sm_x = x_sm
+            sm_y = y_sm
+            sm_z = z_sm
+
+            # --- 5) diagnostics ---
+            res_xyz = np.concatenate([x_sm - x_all, y_sm - y_all, z_sm - z_all])
+            chi2 = np.sum((res_xyz / np.concatenate([sig_x, sig_y, sig_z]))**2) if sig_x is not None else np.sum(res_xyz**2)
+            dof = max(len(res_xyz) - 5, 1)  # 5 params: xc,yc,R,z0,a
+            chi2_red = chi2 / dof
+
+            sm_metrics = {
+                "chi2": chi2,
+                "chi2_red": chi2_red,
+                "xc": xc_fit, "yc": yc_fit, "R": R_fit,
+                "z0": z0, "a": a
+            }
+            
+            chi2nu_sm = sm_metrics["chi2_red"]
+
+            print(f"[SM Fit] xc={xc_fit:.2f}, yc={yc_fit:.2f}, R={R_fit:.2f}")
+            print(f"[SM Fit] chi2_red={chi2_red:.3e}, res_std={np.std(res_xyz):.3e}")
 
         # Store R^2 values for summaries
         r2_x_all.append(m_x["R2"])
@@ -1051,27 +1250,42 @@ if __name__ == '__main__':
         eq_y = r"$y(s) = " + sympy_to_latex_with_s(expr_y) + "$"
         eq_z = r"$z(s) = " + sympy_to_latex_with_s(expr_z) + "$"
 
-        # Plotting using the fitted expressions
-        # (build numpy callables from expr_x, expr_y, expr_z)
-        # Helper: build a numpy-callable from an expression with exactly one free symbol
-        def expr_to_callable(expr):
-            free_syms = list(expr.free_symbols)
-            if len(free_syms) != 1:
-                raise ValueError(f"Expected exactly 1 free symbol in expression, got {free_syms}")
-            s_sym = free_syms[0]
-            return sp.lambdify(s_sym, expr, "numpy")
+        S_SYM = sp.Symbol("s")
+
+        def expr_to_callable(expr, s_sym=S_SYM):
+            # constant expression: make it vectorized
+            if len(expr.free_symbols) == 0:
+                c = float(expr)
+                return lambda x: c + 0*x
+
+            # if it contains the expected independent symbol, use it
+            if s_sym in expr.free_symbols:
+                return sp.lambdify(s_sym, expr, "numpy")
+
+            # otherwise: fall back to the only symbol if there is exactly one
+            if len(expr.free_symbols) == 1:
+                only = next(iter(expr.free_symbols))
+                return sp.lambdify(only, expr, "numpy")
+
+            raise ValueError(f"Expression has ambiguous symbols {expr.free_symbols}; expected {s_sym}.")
 
         fx = expr_to_callable(expr_x)
         fy = expr_to_callable(expr_y)
         fz = expr_to_callable(expr_z)
 
-        s_plot = np.linspace(s_all.min(), s_all.max(), 500)
+        # s_all is integer indices 0..(n-1). For plotting, use a dense float grid over the same range.
+        if len(s_all) > 0:
+            s_plot = np.linspace(s_all[0], s_all[-1], 500)
+        else:
+            s_plot = np.array([])
         x_pred = fx(s_plot)
         y_pred = fy(s_plot)
         z_pred = fz(s_plot)
         
         if is_standard_model_dataset and sm_popt is not None:
-            x_sm, y_sm, z_sm = helix_xyz(s_plot, sm_popt)
+            # phi-fit => evaluate with helix_xyz_phi at the hit phis (NO s_plot)
+            phi_unwrap = np.unwrap(np.arctan2(y_all, x_all))
+            x_sm, y_sm, z_sm = helix_xyz_phi(phi_unwrap, sm_popt)
             chi2nu_sm = sm_metrics["chi2_red"]
 
         fig, axes = plt.subplots(3, 1, figsize=(9, 10), sharex=True)
@@ -1084,9 +1298,9 @@ if __name__ == '__main__':
            fr"$\chi^2_\nu={m_x['chi2_red']:.3e}$" + "\n" + eq_x)
         plot_points(axes[0], s_all, x_all, sig_x, label="Data")
         axes[0].plot(s_plot, x_pred, linewidth=2, label=label_x)
-        if is_standard_model_dataset and sm_popt is not None:
+        if is_standard_model_dataset and (sm_x is not None):
             axes[0].plot(
-                s_plot, x_sm,
+                s_all, x_sm,
                 linewidth=2,
                 linestyle="--",
                 label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$"
@@ -1102,8 +1316,8 @@ if __name__ == '__main__':
            fr"$\chi^2_\nu={m_y['chi2_red']:.3e}$" + "\n" + eq_y)
         plot_points(axes[1], s_all, y_all, sig_y, label="Data")
         axes[1].plot(s_plot, y_pred, linewidth=2, label=label_y)
-        if is_standard_model_dataset and sm_popt is not None:
-            axes[1].plot(s_plot, y_sm, linewidth=2, linestyle="--", label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$")
+        if is_standard_model_dataset and (sm_y is not None):
+            axes[1].plot(s_all, y_sm, linewidth=2, linestyle="--", label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$")
         axes[1].set_ylabel("$y$")
         axes[1].legend(fontsize=8)
 
@@ -1115,10 +1329,10 @@ if __name__ == '__main__':
            fr"$\chi^2_\nu={m_z['chi2_red']:.3e}$" + "\n" + eq_z)
         plot_points(axes[2], s_all, z_all, sig_z, label="Data")
         axes[2].plot(s_plot, z_pred, linewidth=2, label=label_z)
-        if is_standard_model_dataset and sm_popt is not None:
-            axes[2].plot(s_plot, z_sm, linewidth=2, linestyle="--", label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$")
+        if is_standard_model_dataset and (sm_z is not None):
+            axes[2].plot(s_all, z_sm, linewidth=2, linestyle="--", label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$")
         axes[2].set_ylabel("$z$")
-        axes[2].set_xlabel("$s$")
+        axes[2].set_xlabel("hit index")
         axes[2].legend(fontsize=8)
 
         plt.tight_layout()

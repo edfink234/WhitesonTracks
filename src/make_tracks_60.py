@@ -494,7 +494,13 @@ def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii, fourierDi
     #Tracks has shape (chunk_size_train,fourDimTrain)
     Tracks = None
     if STANDARD_MODEL:
-        Tracks, best_scores = tracks_standard_model_helix_cm_with_min_hits(t=times, chunk_size=chunk_size, radii=ATLASradii, detector_length=detector_length, B_field=bField, random_seed=42)
+        Tracks_xyz, best_scores = tracks_standard_model_helix_cm_with_min_hits(t=times, chunk_size=chunk_size, radii=ATLASradii, detector_length=detector_length, B_field=bField, random_seed=42)
+        x = Tracks_xyz[:, :, 0]
+        y = Tracks_xyz[:, :, 1]
+        z = Tracks_xyz[:, :, 2]
+        r = np.sqrt(x*x + y*y)
+        phi = np.arctan2(y, x)
+        Tracks = np.stack([r, phi, z], axis=2)
     else:
         Tracks = tracks_cylindrical_fourier_balls(times,fourierDim,Lambda,chunk_size,Radii, min_radii, Centers)
     signal_hits = [] 
