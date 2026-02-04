@@ -744,7 +744,7 @@ if __name__ == '__main__':
     OPEN_HTML = True
     create_dataset = True
     TEMPLATE_PATH = "track_templates.pkl"
-    ADD_FUNC_TO_TEMPLATES = True
+    ADD_FUNC_TO_TEMPLATES = False
     R2_THRESHOLD = 0.997
     RunPySR = True   # Whether to enable (True) or disable (False) PySR discovery
     MaxPySRIters = 100
@@ -921,10 +921,10 @@ if __name__ == '__main__':
         coord = file_path[-5].lower()
         s = sp.Symbol("s")
         print(len(S))
-        fitPlotFunc = False
+        fitPlotFunc = True
         np.asin = np.arcsin; np.acos = np.arccos;
-        plot_func = s/(sp.cos(sp.sqrt(s)) - 2.2661800709136) + 2.345027 if fitPlotFunc else lambda s: s/(np.cos(np.sqrt(s)) - 2.2661800709136) + 2.345027
-        plot_func_eqn = r"$z(s) = \frac{s}{\cos{\left(\sqrt{s} \right)} - 2.27} + 2.35$".replace("x_{0}","s")
+        plot_func = s**0.579373/(118.95633426996 - s**1.000973) + 7.99194*sp.sin(2**sp.log(s) + 5.412041) + 25.66174*sp.cos(54.5693995282261*sp.sqrt(0.00594456321483596*s + 1)) + 4.122059*sp.cos(0.372330640844745*s + 1.18006) + 23.212961*sp.tanh(sp.cos(1.014344**s)) + sp.asin(sp.cos(1.502449*s**0.737102743271667)) + 2.850168 - 0.440079*0.541699**(-sp.cos(sp.sqrt(s)))*s if fitPlotFunc else lambda s: s**0.579373/(118.95633426996 - s**1.000973) + 7.99194*np.sin(2**np.log(s) + 5.412041) + 25.66174*np.cos(54.5693995282261*np.sqrt(0.00594456321483596*s + 1)) + 4.122059*np.cos(0.372330640844745*s + 1.18006) + 23.212961*np.tanh(np.cos(1.014344**s)) + np.asin(np.cos(1.502449*s**0.737102743271667)) + 2.850168 - 0.440079*0.541699**(-np.cos(np.sqrt(s)))*s
+        plot_func_eqn = r"$z(s) = \frac{s^{0.58}}{118.96 - s^{1.0}} + 7.99 \sin{\left(2^{\log{\left(s \right)}} + 5.41 \right)} + 25.66 \cos{\left(54.57 \sqrt{0.01 s + 1} \right)} + 4.12 \cos{\left(0.37 s + 1.18 \right)} + 23.21 \tanh{\left(\cos{\left({1.01}^{s} \right)} \right)} + \operatorname{asin}{\left(\cos{\left(1.5 s^{0.74} \right)} \right)} + 2.85 - 0.44 {0.54}^{- \cos{\left(\sqrt{s} \right)}} s$".replace("x_{0}","s")
 #        plot_func = None
 #        plot_func_eqn = None
         print(*zip(S[track_number-1][:], Z[track_number-1][:]), sep = '\n')
