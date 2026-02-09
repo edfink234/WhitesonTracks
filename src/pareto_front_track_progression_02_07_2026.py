@@ -8,10 +8,15 @@ sse_values = [63574.9, 27980.7, 12477.4, 7773.74, 4674.79, 3120, 2548.01, 1572.9
               1210.09, 949.357, 807.673, 596.653, 445.276, 343.709, 304.552,
               276.834, 240.955, 187.195]
 
+new_depths = [6, 7, 8, 9]
+new_max_sizes = [25, 27, 36, 47]
+new_sse_values = [14319.8, 12195.8, 8860.18, 8003.07]
+
 plt.figure(figsize=(10, 6))
 
 # Plotting the Pareto Front
-plt.plot(max_sizes, sse_values, marker='o', linestyle='-', color='#2c3e50', linewidth=2, label='Pareto Front')
+plt.plot(max_sizes, sse_values, marker='o', linestyle='-', color='#2c3e50', linewidth=2, label='Pareto Front Old')
+plt.plot(new_max_sizes, new_sse_values, marker='o', linestyle='-', color='#6aa84f', linewidth=2, label='Pareto Front New')
 
 # Adding annotations for specific "milestone" depths
 for i, d in enumerate(depths):

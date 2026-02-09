@@ -927,9 +927,10 @@ if __name__ == '__main__':
         fitPlotFunc = True
         np.asin = np.arcsin; np.acos = np.arccos;
         eps = .02
-        plot_func = 0.270243*s*(-sp.sin(1.095518*sp.sqrt(s)) - 1.900612) + (29.034195 - 9.0e-6*s**3)*sp.sin(0.135994202248106*s + 0.135994202248106*sp.sin(sp.sqrt(s))) - 7.504397*sp.cos(0.184501965675006*s) if fitPlotFunc else lambda s: 0.270243*s*(-np.sin(1.095518*np.sqrt(s)) - 1.900612) + (29.034195 - 9.0e-6*s**3)*np.sin(0.135994202248106*s + 0.135994202248106*np.sin(np.sqrt(s))) - 7.504397*np.cos(0.184501965675006*s)
+        plot_func = 0.270898*s*(-sp.sin(1.095518*sp.sqrt(s)) - 1.89698) + (29.026558 - 9.0e-6*s**3)*sp.sin(0.135994202248106*s + 0.135994202248106*sp.sin(sp.sqrt(s))) - 7.60414*sp.cos(0.184501965675006*s) + sp.asin(sp.cos(0.27869250452864*s - 0.557385009057281)) if fitPlotFunc else lambda s: 0.270898*s*(-np.sin(1.095518*np.sqrt(s)) - 1.89698) + (29.026558 - 9.0e-6*s**3)*np.sin(0.135994202248106*s + 0.135994202248106*np.sin(np.sqrt(s))) - 7.60414*np.cos(0.184501965675006*s) + np.asin(np.cos(0.27869250452864*s - 0.557385009057281))
 
-        plot_func_eqn = r"$z(s) = 0.27 s \left(- \sin{\left(1.1 \sqrt{s} \right)} - 1.9\right) + 29.03 \sin{\left(0.14 s + 0.14 \sin{\left(\sqrt{s} \right)} \right)} - 7.5 \cos{\left(0.18 s \right)}$".replace("x_{0}","s")
+
+        plot_func_eqn = r"$z(s) = 0.27 s \left(- \sin{\left(1.1 \sqrt{s} \right)} - 1.9\right) + 29.03 \sin{\left(0.14 s + 0.14 \sin{\left(\sqrt{s} \right)} \right)} - 7.6 \cos{\left(0.18 s \right)} + \operatorname{asin}{\left(\cos{\left(0.28 s - 0.56 \right)} \right)}$".replace("x_{0}","s")
 #        plot_func = None
 #        plot_func_eqn = None
         print(*zip(S[track_number-1][:], Z[track_number-1][:]), sep = '\n')
