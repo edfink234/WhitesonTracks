@@ -471,7 +471,8 @@ def fit_until_both_conditions(
             os.remove(stop_flag_path)
             break
 
-    system("rm -f *hall_of_fame*")
+    system("rm -r *hall_of_fame*")
+    system("rm -r outputs")
     return model, best_R2, total_iters
 
 
