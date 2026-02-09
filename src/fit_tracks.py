@@ -58,10 +58,10 @@ def template_signature(template_or_expr, round_digits=8):
     # Round floats (helper defined earlier)
     expr_rounded = round_floats(expr, round_digits)
 
-    try:
-        expr_simpl = sp.simplify(expr_rounded)
-    except Exception:
-        expr_simpl = expr_rounded
+#    try:
+#        expr_simpl = sp.simplify(expr_rounded)
+#    except Exception:
+    expr_simpl = expr_rounded
 
     # srepr gives a structural representation (stable for equivalence checks)
     return sp.srepr(expr_simpl)
@@ -744,9 +744,9 @@ if __name__ == '__main__':
     OPEN_HTML = True
     create_dataset = True
     TEMPLATE_PATH = "track_templates.pkl"
-    ADD_FUNC_TO_TEMPLATES = False
+    ADD_FUNC_TO_TEMPLATES = True
     R2_THRESHOLD = 0.997
-    RunPySR = True   # Whether to enable (True) or disable (False) PySR discovery
+    RunPySR = False   # Whether to enable (True) or disable (False) PySR discovery
     MaxPySRIters = 100
     num_tracks = 5
     loaded = {}
@@ -807,7 +807,8 @@ if __name__ == '__main__':
         s_name="s",
         sigma=None,
         coord="x",
-        ylim = None
+        ylim = None,
+        legend_size = 10
     ):
         stubborn_track_dataset = np.hstack((X.reshape(-1,1), Y.reshape(-1,1)))
         assert stubborn_track_dataset.shape[0] == X.shape[0]
@@ -826,7 +827,7 @@ if __name__ == '__main__':
 
             plt.scatter(s_data, y_true, label="Data")
 
-            s_vals = np.linspace(s_data.min(), s_data.max(), 1000)
+            s_vals = np.linspace(s_data.min(), s_data.max(), 10000)
 
             if fitPlotFunc:
                 if plot_func is None:
@@ -900,6 +901,7 @@ if __name__ == '__main__':
                 if plot_func is not None:
                     y_pred = plot_func(s_data)
                     R2 = r2_score_1d(y_true, y_pred)
+                    s_vals = np.linspace(min(s_vals), max(vals), 1000)
                     plt.plot(
                         s_vals, plot_func(s_vals),
                         label=fr"Fit: $R^2={R2:.3f}$" + ("\n" + latex_eqn if latex_eqn else ""),
@@ -909,7 +911,7 @@ if __name__ == '__main__':
 
             plt.xlabel("s")
             plt.ylabel("z")
-            plt.legend()
+            plt.legend(prop={'size': legend_size})
             plt.show()
         exit()
     
@@ -923,12 +925,21 @@ if __name__ == '__main__':
         print(len(S))
         fitPlotFunc = True
         np.asin = np.arcsin; np.acos = np.arccos;
-        plot_func = s**0.579373/(118.95633426996 - s**1.000973) + 7.99194*sp.sin(2**sp.log(s) + 5.412041) + 25.66174*sp.cos(54.5693995282261*sp.sqrt(0.00594456321483596*s + 1)) + 4.122059*sp.cos(0.372330640844745*s + 1.18006) + 23.212961*sp.tanh(sp.cos(1.014344**s)) + sp.asin(sp.cos(1.502449*s**0.737102743271667)) + 2.850168 - 0.440079*0.541699**(-sp.cos(sp.sqrt(s)))*s if fitPlotFunc else lambda s: s**0.579373/(118.95633426996 - s**1.000973) + 7.99194*np.sin(2**np.log(s) + 5.412041) + 25.66174*np.cos(54.5693995282261*np.sqrt(0.00594456321483596*s + 1)) + 4.122059*np.cos(0.372330640844745*s + 1.18006) + 23.212961*np.tanh(np.cos(1.014344**s)) + np.asin(np.cos(1.502449*s**0.737102743271667)) + 2.850168 - 0.440079*0.541699**(-np.cos(np.sqrt(s)))*s
-        plot_func_eqn = r"$z(s) = \frac{s^{0.58}}{118.96 - s^{1.0}} + 7.99 \sin{\left(2^{\log{\left(s \right)}} + 5.41 \right)} + 25.66 \cos{\left(54.57 \sqrt{0.01 s + 1} \right)} + 4.12 \cos{\left(0.37 s + 1.18 \right)} + 23.21 \tanh{\left(\cos{\left({1.01}^{s} \right)} \right)} + \operatorname{asin}{\left(\cos{\left(1.5 s^{0.74} \right)} \right)} + 2.85 - 0.44 {0.54}^{- \cos{\left(\sqrt{s} \right)}} s$".replace("x_{0}","s")
+        eps = .02
+        plot_func = 0.270243*s*(-sp.sin(1.095518*sp.sqrt(s)) - 1.900612) + (29.034195 - 9.0e-6*s**3)*sp.sin(0.135994202248106*s + 0.135994202248106*sp.sin(sp.sqrt(s))) - 7.504397*sp.cos(0.184501965675006*s) if fitPlotFunc else lambda s: 0.270243*s*(-np.sin(1.095518*np.sqrt(s)) - 1.900612) + (29.034195 - 9.0e-6*s**3)*np.sin(0.135994202248106*s + 0.135994202248106*np.sin(np.sqrt(s))) - 7.504397*np.cos(0.184501965675006*s)
+
+        plot_func_eqn = r"$z(s) = 0.27 s \left(- \sin{\left(1.1 \sqrt{s} \right)} - 1.9\right) + 29.03 \sin{\left(0.14 s + 0.14 \sin{\left(\sqrt{s} \right)} \right)} - 7.5 \cos{\left(0.18 s \right)}$".replace("x_{0}","s")
 #        plot_func = None
 #        plot_func_eqn = None
         print(*zip(S[track_number-1][:], Z[track_number-1][:]), sep = '\n')
-        create_stubborn_track_dataset(S[track_number-1][:], Z[track_number-1][:], file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-200, 75))
+        N_dat = 1000
+        x_dat = S[track_number-1];# x_min = min(S[track_number-1]); x_max = max(S[track_number-1]);
+#        x_dat = np.linspace(x_min, x_max, N_dat)
+        y_dat = Z[track_number-1];# y_min = min(Z[track_number-1]); y_max = max(Z[track_number-1]);
+#        y_dat = np.linspace(y_min, y_max, N_dat)
+        sigma_dat = SIG_Z_LIST[track_number-1];# sigma_min = min(SIG_Z_LIST[track_number-1]); sigma_max = max(SIG_Z_LIST[track_number-1]);
+#        sigma_dat = np.linspace(sigma_min, sigma_max, N_dat)
+        create_stubborn_track_dataset(x_dat, y_dat, file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-200, 75), sigma = sigma_dat, legend_size = 10)
 
     model_kwargs = dict(
         niterations=100,
@@ -1289,13 +1300,14 @@ if __name__ == '__main__':
             chi2nu_sm = sm_metrics["chi2_red"]
 
         fig, axes = plt.subplots(3, 1, figsize=(9, 10), sharex=True)
-
+        MAX_EQ_CHARS = 80  # tune
         # x(s)
         label_x = (fr"Fit: $R^2={m_x['R2']:.3f}$, "
            fr"$\mathrm{{MSE}}={m_x['MSE']:.3e}$, "
            fr"$\mathrm{{MAE}}={m_x['MAE']:.3e}$, "
            fr"$\chi^2={m_x['chi2']:.3e}$, "
-           fr"$\chi^2_\nu={m_x['chi2_red']:.3e}$" + "\n" + eq_x)
+           fr"$\chi^2_\nu={m_x['chi2_red']:.3e}$"
+           + (("\n" + eq_x) if (eq_x and len(eq_x) <= MAX_EQ_CHARS) else ""))
         plot_points(axes[0], s_all, x_all, sig_x, label="Data")
         axes[0].plot(s_plot, x_pred, linewidth=2, label=label_x)
         if is_standard_model_dataset and (sm_x is not None):
@@ -1313,7 +1325,8 @@ if __name__ == '__main__':
            fr"$\mathrm{{MSE}}={m_y['MSE']:.3e}$, "
            fr"$\mathrm{{MAE}}={m_y['MAE']:.3e}$, "
            fr"$\chi^2={m_y['chi2']:.3e}$, "
-           fr"$\chi^2_\nu={m_y['chi2_red']:.3e}$" + "\n" + eq_y)
+           fr"$\chi^2_\nu={m_y['chi2_red']:.3e}$"
+           + (("\n" + eq_y) if (eq_y and len(eq_y) <= MAX_EQ_CHARS) else ""))
         plot_points(axes[1], s_all, y_all, sig_y, label="Data")
         axes[1].plot(s_plot, y_pred, linewidth=2, label=label_y)
         if is_standard_model_dataset and (sm_y is not None):
@@ -1326,7 +1339,8 @@ if __name__ == '__main__':
            fr"$\mathrm{{MSE}}={m_z['MSE']:.3e}$, "
            fr"$\mathrm{{MAE}}={m_z['MAE']:.3e}$, "
            fr"$\chi^2={m_z['chi2']:.3e}$, "
-           fr"$\chi^2_\nu={m_z['chi2_red']:.3e}$" + "\n" + eq_z)
+           fr"$\chi^2_\nu={m_z['chi2_red']:.3e}$"
+           + (("\n" + eq_z) if (eq_z and len(eq_z) <= MAX_EQ_CHARS) else ""))
         plot_points(axes[2], s_all, z_all, sig_z, label="Data")
         axes[2].plot(s_plot, z_pred, linewidth=2, label=label_z)
         if is_standard_model_dataset and (sm_z is not None):
@@ -1500,8 +1514,21 @@ if __name__ == '__main__':
     .eqJump:hover {
       border-bottom-style: solid;
     }
-
     
+    .eqScroll {
+      margin-top: 8px;
+      padding: 10px 12px;
+      background: #f7f7f7;
+      border: 1px solid #eee;
+      border-radius: 12px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
+    }
+    .eqScroll mjx-container {
+      display: inline-block; /* keeps MathJax from forcing weird wraps */
+    }
+
     .meta { font-size: 13px; color: #444; margin: 6px 0 0; }
     .meta b { font-weight: 600; }
 
@@ -1563,7 +1590,11 @@ if __name__ == '__main__':
       const t = slides[i];
 
       // NOTE: eqx/eqy/eqz are already "$...$" strings.
-      const eqBlock = `${t.eqx}<br/>${t.eqy}<br/>${t.eqz}`;
+      const eqBlock = `
+          <div class="eqScroll">${t.eqx}</div>
+          <div class="eqScroll">${t.eqy}</div>
+          <div class="eqScroll">${t.eqz}</div>
+        `;
 
       const html = `
       <div class="meta">
@@ -1638,7 +1669,7 @@ if __name__ == '__main__':
 
         <div class="eq" style="margin-top:10px;">
           <div><b>Equation ${eqIdx + 1}:</b></div>
-          <div style="margin-top:6px;">${e.eq}</div>
+          <div class="eqScroll" style="margin-top:6px;">${e.eq}</div>
           <div class="meta" style="margin-top:10px;">
             ${usesHtml}
           </div>
@@ -1706,11 +1737,8 @@ if __name__ == '__main__':
         for t in tracks:
             mx, my, mz = t["mx"], t["my"], t["mz"]
             # Equations are already like: "$x(s)=...$"
-            eq_block = "<br/>".join([
-                t["eqx"],
-                t["eqy"],
-                t["eqz"],
-            ])
+            eq_block = "".join([f'<div class="eqScroll">{t["eqx"]}</div>', f'<div class="eqScroll">{t["eqy"]}</div>', f'<div class="eqScroll">{t["eqz"]}</div>'])
+
             
             chi_x = sci_to_latex(f"{mx['chi2_red']:.3e}")
             chi_y = sci_to_latex(f"{my['chi2_red']:.3e}")
