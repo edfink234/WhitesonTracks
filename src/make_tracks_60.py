@@ -10,8 +10,8 @@ from datetime import datetime
 INPUTS = {
     # Required in practice
     "OUTPUT_FOLDER": "",
-    "NUM_TRAIN_TRACKS": 10,
-    "NUM_TEST_TRACKS": 10,
+    "NUM_TRAIN_TRACKS": 5,
+    "NUM_TEST_TRACKS": 5,
 
     # Detector geometry
     "NUMBER_OF_LAYERS": 25,
@@ -35,7 +35,7 @@ INPUTS = {
     "HIT_NOISE_SIGMA_Z": 0.01,
     
     # Standard Model?
-    "STANDARD_MODEL": True
+    "STANDARD_MODEL": False
 }
 
 # Physical Constants
@@ -558,7 +558,7 @@ def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii, fourierDi
         signal_hits.append(intersection_points_df)
     return signal_hits
 
-def make_track_plot(tracks, num_plotted_samples):
+def make_track_plot(tracks, num_plotted_samples, show = False):
     # TracksTrain has shape (chunk_size_train, fourDimTrain)
     
     # Creating figure
@@ -598,7 +598,10 @@ def make_track_plot(tracks, num_plotted_samples):
     # Final plot settings
     plt.title(plot_title)
     plt.legend()
-    plt.savefig(plotting_save_file)
+    if show:
+        plt.show()
+    else:
+        plt.savefig(plotting_save_file)
 
 
 def prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer, 
@@ -716,11 +719,15 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
             prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer, 
                             event_id, final_iteration = True, signal_hits = signal_hits, 
                             remaining_events_after_chunks = remaining_events_after_chunks)
-            
-print("making train set")
-make_files(datatype = 'train', signal_tracks_per_event = signal_tracks_per_event,fourierRadii = fourierRadiiTrain,fourierDim = fourierDimTrain,
-          times = times, fourierCenters = fourierCenters, min_radii=min_train_radii,Lambda = Lambda, min_dist_to_detector_layer = min_dist_to_detector_layer, data_combination='signal')
 
-print("making test set")
-make_files(datatype = 'test', signal_tracks_per_event = signal_tracks_per_event,fourierRadii = fourierRadiiTest,fourierDim = fourierDimTest,
-          times = times, fourierCenters = fourierCenters, min_radii=min_test_radii, Lambda = Lambda, min_dist_to_detector_layer = min_dist_to_detector_layer, data_combination ='signal')
+if __name__ == '__main__':
+
+    print("making train set")
+    make_files(datatype = 'train', signal_tracks_per_event = signal_tracks_per_event,fourierRadii = fourierRadiiTrain,fourierDim = fourierDimTrain,
+              times = times, fourierCenters = fourierCenters, min_radii=min_train_radii,Lambda = Lambda, min_dist_to_detector_layer = min_dist_to_detector_layer, data_combination='signal')
+
+    print("making test set")
+    make_files(datatype = 'test', signal_tracks_per_event = signal_tracks_per_event,fourierRadii = fourierRadiiTest,fourierDim = fourierDimTest,
+              times = times, fourierCenters = fourierCenters, min_radii=min_test_radii, Lambda = Lambda, min_dist_to_detector_layer = min_dist_to_detector_layer, data_combination ='signal')
+
+

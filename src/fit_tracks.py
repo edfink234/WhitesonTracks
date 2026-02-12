@@ -838,10 +838,11 @@ if __name__ == '__main__':
                 metrics, p_opt, expr_fitted, y_pred = fit_template_to_data(
                     template, s_data, y_true, sigma=sigma
                 )
-                s_latex = sp.Symbol("s")  # for printing
-                expr_for_latex = round_floats(expr_fitted.xreplace({template["s_sym"]: s_latex}), 3)
-                
-                latex_eqn = f"${sp.latex(expr_for_latex)}$"
+                if not latex_eqn:
+                    s_latex = sp.Symbol("s")  # for printing
+                    expr_for_latex = round_floats(expr_fitted.xreplace({template["s_sym"]: s_latex}), 3)
+                    
+                    latex_eqn = f"${sp.latex(expr_for_latex)}$"
 
                 # plot fitted curve
                 f_plot = sp.lambdify((template["s_sym"],), expr_fitted, "numpy")
@@ -927,10 +928,10 @@ if __name__ == '__main__':
         fitPlotFunc = True
         np.asin = np.arcsin; np.acos = np.arccos;
         eps = .02
-        plot_func = 0.270898*s*(-sp.sin(1.095518*sp.sqrt(s)) - 1.89698) + (29.026558 - 9.0e-6*s**3)*sp.sin(0.135994202248106*s + 0.135994202248106*sp.sin(sp.sqrt(s))) - 7.60414*sp.cos(0.184501965675006*s) + sp.asin(sp.cos(0.27869250452864*s - 0.557385009057281)) if fitPlotFunc else lambda s: 0.270898*s*(-np.sin(1.095518*np.sqrt(s)) - 1.89698) + (29.026558 - 9.0e-6*s**3)*np.sin(0.135994202248106*s + 0.135994202248106*np.sin(np.sqrt(s))) - 7.60414*np.cos(0.184501965675006*s) + np.asin(np.cos(0.27869250452864*s - 0.557385009057281))
+        plot_func =    -0.058335*s*sp.sin(0.262783179800533*s) - 0.347245*s*sp.tanh(sp.sin(1.092289*sp.sqrt(s))) + (27.628894 - 7.0e-6*s**3)*sp.sin(0.135994202248106*s + 0.135994202248106*sp.sin(sp.sqrt(s))) + 5.242812*(2*s + 1.891351)*(sp.sqrt((1/((1/2)*sp.exp(s) + (1/2)*sp.exp(-s)))) - 0.050304) - 5.117139*sp.sin(0.367879441171442*s) - sp.sin(0.529667341874463*s) + 2.957985*sp.sin(0.451582705289455*s - 0.451582705289455*sp.tanh(s)) - 7.54465*sp.cos(0.184501965675006*s) + sp.asin(sp.cos(0.25*s)) + sp.asin(sp.cos(0.594932778023209*s)) - sp.asin(sp.cos(0.517512499805315*s - 0.796576)) + 0.984618192784829 if fitPlotFunc else lambda s: -0.058335*s*np.sin(0.262783179800533*s) - 0.347245*s*np.tanh(np.sin(1.092289*np.sqrt(s))) + (27.628894 - 7.0e-6*s**3)*np.sin(0.135994202248106*s + 0.135994202248106*np.sin(np.sqrt(s))) + 5.242812*(2*s + 1.891351)*(np.sqrt((1/((1/2)*np.exp(s) + (1/2)*np.exp(-s)))) - 0.050304) - 5.117139*np.sin(0.367879441171442*s) - np.sin(0.529667341874463*s) + 2.957985*np.sin(0.451582705289455*s - 0.451582705289455*np.tanh(s)) - 7.54465*np.cos(0.184501965675006*s) + np.asin(np.cos(0.25*s)) + np.asin(np.cos(0.594932778023209*s)) - np.asin(np.cos(0.517512499805315*s - 0.796576)) + 0.984618192784829
 
 
-        plot_func_eqn = r"$z(s) = 0.27 s \left(- \sin{\left(1.1 \sqrt{s} \right)} - 1.9\right) + 29.03 \sin{\left(0.14 s + 0.14 \sin{\left(\sqrt{s} \right)} \right)} - 7.6 \cos{\left(0.18 s \right)} + \operatorname{asin}{\left(\cos{\left(0.28 s - 0.56 \right)} \right)}$".replace("x_{0}","s")
+        plot_func_eqn = r"$z(s) = - 0.06\cdot s\cdot \sin{\left(0.26\cdot s \right)} - 0.35\cdot s\cdot \tanh{\left(\sin{\left(1.09\cdot \sqrt{s} \right)} \right)} + 5.24\cdot \left(2\cdot s + 1.89\right)\cdot \left(\sqrt{\operatorname{sech}{\left(s \right)}} - 0.05\right) - 5.12\cdot \sin{\left(0.37\cdot s \right)} - \sin{\left(0.53\cdot s \right)} + 27.63\cdot \sin{\left(0.14\cdot s + 0.14\cdot \sin{\left(\sqrt{s} \right)} \right)} $""\n"r"$+ 2.96\cdot \sin{\left(0.45\cdot s - 0.45\cdot \tanh{\left(s \right)} \right)} - 7.54\cdot \cos{\left(0.18\cdot s \right)} + \operatorname{asin}{\left(\cos{\left(0.25\cdot s \right)} \right)} + \operatorname{asin}{\left(\cos{\left(0.59\cdot s \right)} \right)} - \operatorname{asin}{\left(\cos{\left(0.52\cdot s - 0.8 \right)} \right)} + 0.98$".replace("x_{0}","s")
 #        plot_func = None
 #        plot_func_eqn = None
         print(*zip(S[track_number-1][:], Z[track_number-1][:]), sep = '\n')
@@ -941,7 +942,8 @@ if __name__ == '__main__':
 #        y_dat = np.linspace(y_min, y_max, N_dat)
         sigma_dat = SIG_Z_LIST[track_number-1];# sigma_min = min(SIG_Z_LIST[track_number-1]); sigma_max = max(SIG_Z_LIST[track_number-1]);
 #        sigma_dat = np.linspace(sigma_min, sigma_max, N_dat)
-        create_stubborn_track_dataset(x_dat, y_dat, file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-200, 75), sigma = sigma_dat, legend_size = 10)
+        
+        create_stubborn_track_dataset(x_dat, y_dat, file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-200, 75), sigma = sigma_dat, legend_size = 6)
 
     model_kwargs = dict(
         niterations=100,
