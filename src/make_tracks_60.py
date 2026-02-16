@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import json, time, subprocess
 import re
 from datetime import datetime
+import glob
 
 INPUTS = {
     # Required in practice
@@ -177,14 +178,23 @@ Lambda = np.max(ATLASradii)
 min_dist_to_detector_layer = 0.05
 times = np.linspace(0,Lambda, 500000)
 
-plotting = False
+# PLOTTING
+# ========
+plotting = True
+plot_hits_and_curve = True
+plot_curve_only = False
 plotting_datatype = 'train'
-num_plotted_samples = 1
+num_plotted_samples = 3
 plotting_save_file = 'plot_4_of_tracks'
 plot_title = "Schwarts space tracks"
 
-chunk_size = 4
+chunk_size = 4 # how many events are generated in one batch (one chunk).
 
+# Physical constants (exact)
+_C = 2.99792458e8               # speed of light, m/s
+_E_CHARGE = 1.602176634e-19     # elementary charge, C
+# Conversion factor: 1 (GeV/c) -> kg*m/s  (use E/c where 1 GeV = 1.602176634e-10 J)
+_GEV_C_TO_KGMS = (1.602176634e-10) / _C   # ≈ 5.344286e-19 kg·m/s
 
 #if we wanted to make a different volume in fourier space, we could easily make a new function, ie. sample_from_cube or something analogous 
 def sample_from_ball(chunk_size, max_radius, min_radius, center = np.zeros(3)):
@@ -220,16 +230,6 @@ def fourierExpand(fourierDim, Lambda, t, chunk_size = chunk_size):
         fourList.append(np.cos(2 * np.pi * f_dimension * t[:,np.newaxis, np.newaxis]/Lambda - shift[:,f_dimension,:,:]))
     fourList = np.array(fourList)
     return (fourList, shift)
-
-import numpy as np
-
-# Physical constants (exact)
-_C = 2.99792458e8               # speed of light, m/s
-_E_CHARGE = 1.602176634e-19     # elementary charge, C
-# Conversion factor: 1 (GeV/c) -> kg*m/s  (use E/c where 1 GeV = 1.602176634e-10 J)
-_GEV_C_TO_KGMS = (1.602176634e-10) / _C   # ≈ 5.344286e-19 kg·m/s
-
-import numpy as np
 
 def _count_layer_crossings_for_track(r_samples, z_samples, layer_radii_cm, z_limit_cm, tol_cm=0.5):
     """
@@ -444,7 +444,7 @@ def tracks_cylindrical_fourier_balls(t,fourierDim, Lambda, chunk_size, radii, mi
     fourierExp ,phase_shifts = fourierExpand(fourierDim, Lambda, t, chunk_size)
     cosPhases = np.cos(phase_shifts)
     fourierCoefficients = make_tracks_from_fourier_balls(chunk_size,fourierDim, radii, min_radii, centers) #(fourierDim,chunk_size ,3)
-    print(fourierCoefficients)
+#    print(fourierCoefficients)
     translate_to_origin = -np.sum(cosPhases[0] * np.transpose(fourierCoefficients, axes = [0,2,1]), axis = 0) # shapes (time, fourDim, 3, chunk),  (fourierDim,chunk_size ,3)
     cartesian_curve = np.sum(fourierExp * np.transpose(fourierCoefficients, axes=[0,2,1])[:,np.newaxis,:,:],axis = 0) # shapes (fourDim, time, 3, chunk), (fourierDim,chunk_size ,3), sum over fourierDim
     cartesian_curve = cartesian_curve + translate_to_origin
@@ -509,9 +509,12 @@ def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii, fourierDi
         #curve has shape (time steps, coordinates)
         curve = Tracks[:,track,:]
 
-        if plotting == True:
-            intersection_points_df = pd.DataFrame(curve, columns = ['r', 'phi','z'])
-            make_track_plot([intersection_points_df], 1)
+        if plotting and track < num_plotted_samples:
+            curve_df = pd.DataFrame(curve, columns=['r', 'phi', 'z'])
+
+            # legacy: just plot continuous curve
+            if plot_curve_only and not plot_hits_and_curve:
+                make_track_plot([curve_df], 1)
 
         intersection_points = map_curve_to_hits(curve, min_dist_to_detector_layer)
         
@@ -555,6 +558,18 @@ def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii, fourierDi
 
         intersection_points_df = intersection_points_df.loc[:intersection_points_df[(intersection_points_df['r'] >= max_B_radius)].index.min()]
         intersection_points_df = intersection_points_df.loc[:intersection_points_df[np.abs(intersection_points_df['z']) >= detector_length/2].index.min()]
+        if plotting and plot_hits_and_curve and track < num_plotted_samples:
+            try:
+                out_file = f"{plotting_save_file}_track{track}.png"
+                make_track_hits_and_curve_plot(
+                    curve_df,
+                    intersection_points_df[['r','phi','z']] if len(intersection_points_df) else intersection_points_df,
+                    out_file=out_file,
+                    title=f"{plot_title} (track {track})",
+                    show=False,
+                )
+            except Exception as e:
+                print(f"[plot_hits_and_curve] Warning: failed to plot track {track}: {e}")
         signal_hits.append(intersection_points_df)
     return signal_hits
 
@@ -602,6 +617,51 @@ def make_track_plot(tracks, num_plotted_samples, show = False):
         plt.show()
     else:
         plt.savefig(plotting_save_file)
+
+def make_track_hits_and_curve_plot(curve_df, hits_df, *, out_file, title="", show=False):
+    """Diagnostic plot: overlay continuous curve (line) and detector hits (points)."""
+    fig = plt.figure(figsize=(10, 7))
+    ax = plt.axes(projection="3d")
+
+    # Continuous curve
+    r = curve_df['r'].to_numpy()
+    phi = curve_df['phi'].to_numpy()
+    z = curve_df['z'].to_numpy()
+    x = r * np.cos(phi)
+    y = r * np.sin(phi)
+    ax.plot3D(x, y, z, linewidth=1.2, label="Continuous curve")
+
+    # Discrete hits (if any)
+    if hits_df is not None and len(hits_df) > 0:
+        rh = hits_df['r'].to_numpy()
+        phih = hits_df['phi'].to_numpy()
+        zh = hits_df['z'].to_numpy()
+        xh = rh * np.cos(phih)
+        yh = rh * np.sin(phih)
+        ax.scatter3D(xh, yh, zh, s=14, label="Hits")
+
+    # Detector cylinders (same style as make_track_plot)
+    theta = np.linspace(0, 2 * np.pi, 100)
+    zmin = float(np.min(z)) if len(z) else -detector_length/2
+    zmax = float(np.max(z)) if len(z) else  detector_length/2
+    if hits_df is not None and len(hits_df) > 0:
+        zmin = min(zmin, float(hits_df['z'].min()))
+        zmax = max(zmax, float(hits_df['z'].max()))
+    z_range = np.linspace(zmin, zmax, 100)
+
+    for radius in ATLASradii[22:]:
+        Theta, Z = np.meshgrid(theta, z_range)
+        X = radius * np.cos(Theta)
+        Y = radius * np.sin(Theta)
+        ax.plot_surface(X, Y, Z, color='cyan', alpha=0.2, rstride=5, cstride=5)
+
+    plt.title(title)
+    plt.legend()
+    if show:
+        plt.show()
+    else:
+        plt.savefig(out_file, dpi=160, bbox_inches="tight")
+    plt.close(fig)
 
 
 def prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer, 
@@ -719,6 +779,18 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
             prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer, 
                             event_id, final_iteration = True, signal_hits = signal_hits, 
                             remaining_events_after_chunks = remaining_events_after_chunks)
+    
+    print("\n==================== OUTPUT SUMMARY ====================")
+    print(f"Script location: {os.path.abspath(__file__)}")
+    print(f"Executed from:   {os.path.abspath(os.getcwd())}")
+    path_folder = os.path.join(output_dir,new_output_folder)
+    print(f"Data directory: {os.path.abspath(path_folder)}")
+    _files = glob.glob(os.path.join(path_folder, "*.csv"))
+    print(f"{len(_files)} files written.")
+    if plotting:
+        print(f"Plot prefix: {os.path.abspath(plotting_save_file)}_track*.png")
+    print("========================================================\n")
+
 
 if __name__ == '__main__':
 
