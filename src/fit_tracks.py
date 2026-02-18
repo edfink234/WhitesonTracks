@@ -826,9 +826,19 @@ if __name__ == '__main__':
             s_data = stubborn_track_dataset[:, 0].astype(float)
             y_true = stubborn_track_dataset[:, 1].astype(float)
 
-            plt.scatter(s_data, y_true, label="Data")
+            # create main + residual axes (ATLAS-like layout: main on top, small residual pad below)
+            fig, (ax_main, ax_res) = plt.subplots(
+                2, 1, sharex=True,
+                gridspec_kw={'height_ratios': [3, 1]},
+                figsize=(8, 6)
+            )
+            plt.subplots_adjust(hspace=0.05)  # tight vertical spacing
+
+            # scatter on main pad
+            ax_main.scatter(s_data, y_true, label="Data", marker='.', s=20, edgecolor='k', facecolor='k')
 
             s_vals = np.linspace(s_data.min(), s_data.max(), 10000)
+            y_pred = None  # will be set if we have a fit/plot_func
 
             if fitPlotFunc:
                 if plot_func is None:
@@ -841,59 +851,16 @@ if __name__ == '__main__':
                 if not latex_eqn:
                     s_latex = sp.Symbol("s")  # for printing
                     expr_for_latex = round_floats(expr_fitted.xreplace({template["s_sym"]: s_latex}), 3)
-                    
                     latex_eqn = f"${sp.latex(expr_for_latex)}$"
 
-                # plot fitted curve
+                # plot fitted curve on main pad
                 f_plot = sp.lambdify((template["s_sym"],), expr_fitted, "numpy")
-
-                if ADD_FUNC_TO_TEMPLATES:
-                    def _template_signature(t):
-                        # t is a template dict with key "expr"
-                        return sp.srepr(t["expr"])
-
-                    def _load_template_db(path):
-                        if not os.path.exists(path):
-                            return {"x_templates": [], "y_templates": [], "z_templates": []}
-                        with open(path, "rb") as f:
-                            db = pickle.load(f)
-
-                        # Backwards/defensive normalization
-                        if isinstance(db, list):
-                            # old format: treat as x_templates by default
-                            db = {"x_templates": db, "y_templates": [], "z_templates": []}
-                        elif isinstance(db, dict):
-                            db.setdefault("x_templates", [])
-                            db.setdefault("y_templates", [])
-                            db.setdefault("z_templates", [])
-                        else:
-                            raise TypeError(f"Unexpected templates db type: {type(db)}")
-                        return db
-
-                    def _save_template_db(path, db):
-                        with open(path, "wb") as f:
-                            pickle.dump(db, f)
-
-                    coord_key = f"{coord.lower()}_templates"   # requires coord in {"x","y","z"}
-                    db = _load_template_db(TEMPLATE_PATH)
-
-                    bucket = db[coord_key]
-
-                    new_sig = _template_signature(template)
-                    existing_sigs = {_template_signature(t) for t in bucket}
-
-                    if new_sig not in existing_sigs:
-                        bucket.append(template)
-                        _save_template_db(TEMPLATE_PATH, db)
-                        print(f"[template] Added new template to {coord_key} → {TEMPLATE_PATH}")
-                    else:
-                        print(f"[template] Template already exists in {coord_key}, not adding.")
-                plt.plot(
-                    s_vals, f_plot(s_vals),
+                ax_main.plot(s_vals, f_plot(s_vals),
                     label=fr"Fit (template): $R^2={metrics['R2']:.3f}$" + "\n" + latex_eqn,
+                    linewidth=1.5
                 )
                 if ylim:
-                    plt.ylim(*ylim)
+                    ax_main.set_ylim(*ylim)
 
                 print("Fitted params:", p_opt)
                 print("Fitted expr:", expr_fitted)
@@ -901,21 +868,68 @@ if __name__ == '__main__':
 
             else:
                 if plot_func is not None:
+                    # compute prediction on data x for residuals and for plotting continuous curve
                     y_pred = plot_func(s_data)
                     R2 = r2_score_1d(y_true, y_pred)
-                    s_vals = np.linspace(min(s_vals), max(vals), 1000)
-                    plt.plot(
-                        s_vals, plot_func(s_vals),
+                    s_vals = np.linspace(s_data.min(), s_data.max(), 1000)  # fixed bug (was max(vals))
+                    ax_main.plot(s_vals, plot_func(s_vals),
                         label=fr"Fit: $R^2={R2:.3f}$" + ("\n" + latex_eqn if latex_eqn else ""),
+                        linewidth=1.5
                     )
                     if ylim:
-                        plt.ylim(*ylim)
+                        ax_main.set_ylim(*ylim)
 
-            plt.xlabel("s")
-            plt.ylabel("z")
-            plt.legend(prop={'size': legend_size})
+            # finalize main pad
+            ax_main.set_ylabel("z")
+            ax_main.legend(prop={'size': legend_size})
+            # styling touches (ATLAS-like: no top/right spines)
+            for spine in ['top', 'right']:
+                ax_main.spines[spine].set_visible(False)
+
+            # --- Residuals pad: only if we have predictions to compute residuals ---
+            if y_pred is not None:
+                # ensure y_pred is evaluated at s_data shape
+                y_pred_at_data = np.asarray(y_pred).flatten() if np.shape(y_pred) == np.shape(y_true) else np.asarray(plot_func(s_data)).flatten() if plot_func is not None else np.asarray(y_pred).flatten()
+                residuals = y_true - y_pred_at_data
+
+                # plot residuals with errorbars if sigma provided (sigma may be per-point or scalar)
+                if sigma is not None:
+                    sigma_arr = np.asarray(sigma)
+                    if sigma_arr.size == 1:
+                        sigma_plot = np.ones_like(residuals) * sigma_arr.item()
+                    else:
+                        sigma_plot = sigma_arr.flatten()
+                    ax_res.errorbar(s_data, residuals, yerr=sigma_plot, fmt='o', markersize=4, elinewidth=0.8, capsize=2)
+                else:
+                    ax_res.scatter(s_data, residuals, marker='o', s=20, edgecolor='k', facecolor='none')
+
+                # zero line
+                ax_res.axhline(0, linestyle='-', linewidth=0.8)
+
+                # labels and limits
+                ax_res.set_xlabel("s")
+                ax_res.set_ylabel("Residuals")
+                # smaller y tick labels for residual pad
+                ax_res.tick_params(axis='both', which='major', labelsize=8)
+                # remove top/right spines for residual pad too
+                for spine in ['top', 'right']:
+                    ax_res.spines[spine].set_visible(False)
+
+                # optionally tighten residual y-limits a bit for visibility
+                r_std = np.std(residuals)
+                if r_std > 0:
+                    ylim_res = max(1.2 * r_std, np.max(np.abs(residuals)) * 1.1)
+                    ax_res.set_ylim(-ylim_res, ylim_res)
+
+            else:
+                # no prediction available: show only x label on bottom
+                ax_res.set_xlabel("s")
+                ax_res.set_visible(False)  # hide the small pad if no residuals
+
             plt.show()
+
         exit()
+
     
     if create_dataset:
         base_path = "../stubborn_track_csvs"
@@ -928,7 +942,7 @@ if __name__ == '__main__':
         fitPlotFunc = True
         np.asin = np.arcsin; np.acos = np.arccos;
         eps = .02
-        plot_func = 12.4747455632814*s*(sp.sqrt((1/((1/2)*sp.exp(s) + (1/2)*sp.exp(-s)))) - 0.0428025409225677) - 0.0579755737087399*s*sp.sin(0.262783179800533*s) - 0.350581216261835*s*sp.tanh(sp.sin(1.09044049351299*sp.sqrt(s))) + 7.96223084148762*(3.49514801757571 - 8.39238396665998e-7*s**3)*sp.sin(0.135994202248106*s + 0.135994202248106*sp.sin(sp.sqrt(s))) - 5.44112457439503*sp.sin(0.367879441171442*s) + 1.72155527043459*sp.sin(0.713731637960093*s) + 1.72155527043459*sp.sin(0.643680068897326*sp.sqrt(s)*sp.sin(sp.sqrt(s))) + sp.sin(s*(sp.acos(sp.sin(s)) - 0.27450007703406)) + sp.sin(s*sp.cos((1/((1/2)*sp.exp(0.0136985281801015*s) + (1/2)*sp.exp(-0.0136985281801015*s))))) + sp.sin((-s - 0.560879314715358)*(sp.tanh(s) - 0.367879441171442)) - sp.sin(1.01667002247176*sp.sqrt(s) + 1.01667002247176*s) + 2.38424457876693*sp.sin(0.451582705289455*s - 0.251946178384616) - 1.72155527043459*sp.sin(0.956994426515978*s - 0.703433417985952) - 7.96223084148762*sp.cos(0.184501965675006*s) + 1.72155527043459*sp.cos(0.859238155913655*s) + sp.cos(1.52297301362374*s**2) + sp.cos(s*(1.59744832614775 - s)) + sp.cos(s*(2*s + 0.258012275465596)) + sp.cos(s*(sp.asin(sp.cos(s)) + 2)) + 1.72155527043459*sp.tanh(sp.cos(0.26580222883408*s)) + sp.tanh(sp.cos(1.2834777179177*s)) + 2.38424457876693*sp.acos(sp.sin(0.517512499805315*s + 0.58418051209954)) + 1.72155527043459*sp.asin(sp.cos(0.25*s)) + 1.72155527043459*sp.asin(sp.cos(0.594932778023209*s)) + sp.asin(sp.cos(0.983299037360805*sp.sqrt(s) + 0.983299037360805*s)) - 2.685527620334 if fitPlotFunc else lambda s: 12.4747455632814*s*(np.sqrt((1/((1/2)*np.exp(s) + (1/2)*np.exp(-s)))) - 0.0428025409225677) - 0.0579755737087399*s*np.sin(0.262783179800533*s) - 0.350581216261835*s*np.tanh(np.sin(1.09044049351299*np.sqrt(s))) + 7.96223084148762*(3.49514801757571 - 8.39238396665998e-7*s**3)*np.sin(0.135994202248106*s + 0.135994202248106*np.sin(np.sqrt(s))) - 5.44112457439503*np.sin(0.367879441171442*s) + 1.72155527043459*np.sin(0.713731637960093*s) + 1.72155527043459*np.sin(0.643680068897326*np.sqrt(s)*np.sin(np.sqrt(s))) + np.sin(s*(np.acos(np.sin(s)) - 0.27450007703406)) + np.sin(s*np.cos((1/((1/2)*np.exp(0.0136985281801015*s) + (1/2)*np.exp(-0.0136985281801015*s))))) + np.sin((-s - 0.560879314715358)*(np.tanh(s) - 0.367879441171442)) - np.sin(1.01667002247176*np.sqrt(s) + 1.01667002247176*s) + 2.38424457876693*np.sin(0.451582705289455*s - 0.251946178384616) - 1.72155527043459*np.sin(0.956994426515978*s - 0.703433417985952) - 7.96223084148762*np.cos(0.184501965675006*s) + 1.72155527043459*np.cos(0.859238155913655*s) + np.cos(1.52297301362374*s**2) + np.cos(s*(1.59744832614775 - s)) + np.cos(s*(2*s + 0.258012275465596)) + np.cos(s*(np.asin(np.cos(s)) + 2)) + 1.72155527043459*np.tanh(np.cos(0.26580222883408*s)) + np.tanh(np.cos(1.2834777179177*s)) + 2.38424457876693*np.acos(np.sin(0.517512499805315*s + 0.58418051209954)) + 1.72155527043459*np.asin(np.cos(0.25*s)) + 1.72155527043459*np.asin(np.cos(0.594932778023209*s)) + np.asin(np.cos(0.983299037360805*np.sqrt(s) + 0.983299037360805*s)) - 2.685527620334
+        plot_func = 12.4695590591746*s*(sp.sqrt((1/((1/2)*sp.exp(s) + (1/2)*sp.exp(-s)))) - 0.0428025409225677) - 0.0576709193858383*s*sp.sin(0.262783179800533*s) - 0.350477030816587*s*sp.tanh(sp.sin(1.09044049351299*sp.sqrt(s))) + 7.97783160006447*(3.48706450390776 - 8.39238396665998e-7*s**3)*sp.sin(0.135994202248106*s + 0.135994202248106*sp.sin(sp.sqrt(s))) + sp.sin(sp.sqrt(s))*sp.sin(sp.cos(2*s)) - 5.42265920338155*sp.sin(0.367879441171442*s) + 1.65600148666407*sp.sin(0.713731637960093*s) + 1.65600148666407*sp.sin(0.64917411833374*sp.sqrt(s)*sp.sin(sp.sqrt(s))) + sp.sin(s*(sp.acos(sp.sin(s)) - 0.27450007703406)) + sp.sin(s*sp.cos((1/((1/2)*sp.exp(0.0136985281801015*s) + (1/2)*sp.exp(-0.0136985281801015*s))))) + sp.sin((-s - 0.583625833603454)*(sp.tanh(s) - 0.367879441171442)) - sp.sin(1.01661754297574*sp.sqrt(s) + 1.01661754297574*s) + 2.376153243946*sp.sin(0.451582705289455*s - 0.252573031963569) - 1.65600148666407*sp.sin(0.956994426515978*s - 0.708420375360123) - 7.97783160006447*sp.cos(0.184501965675006*s) + 1.65600148666407*sp.cos(0.594932778023209*s) + 1.65600148666407*sp.cos(0.859238155913655*s) + sp.cos(1.52297301362374*s**2) + sp.cos(s*(1.59664395934235 - s)) + sp.cos(s*(2*s + 0.258012275465596)) + sp.cos(s*(sp.asin(sp.cos(s)) + 2)) + 1.65600148666407*sp.tanh(sp.cos(0.26580222883408*s)) + sp.tanh(sp.cos(1.2834777179177*s)) + sp.tanh(sp.cos(s**(1/4)*(0.0584052888375429 - s))) + 2.376153243946*sp.acos(sp.sin(0.517512499805315*s + 0.591096921153889)) + 1.65600148666407*sp.asin(sp.cos(0.25*s)) + sp.asin(sp.cos(0.983155114639505*sp.sqrt(s) + 0.983155114639505*s)) - 2.69148562467853 if fitPlotFunc else lambda s: 12.4695590591746*s*(np.sqrt((1/((1/2)*np.exp(s) + (1/2)*np.exp(-s)))) - 0.0428025409225677) - 0.0576709193858383*s*np.sin(0.262783179800533*s) - 0.350477030816587*s*np.tanh(np.sin(1.09044049351299*np.sqrt(s))) + 7.97783160006447*(3.48706450390776 - 8.39238396665998e-7*s**3)*np.sin(0.135994202248106*s + 0.135994202248106*np.sin(np.sqrt(s))) + np.sin(np.sqrt(s))*np.sin(np.cos(2*s)) - 5.42265920338155*np.sin(0.367879441171442*s) + 1.65600148666407*np.sin(0.713731637960093*s) + 1.65600148666407*np.sin(0.64917411833374*np.sqrt(s)*np.sin(np.sqrt(s))) + np.sin(s*(np.acos(np.sin(s)) - 0.27450007703406)) + np.sin(s*np.cos((1/((1/2)*np.exp(0.0136985281801015*s) + (1/2)*np.exp(-0.0136985281801015*s))))) + np.sin((-s - 0.583625833603454)*(np.tanh(s) - 0.367879441171442)) - np.sin(1.01661754297574*np.sqrt(s) + 1.01661754297574*s) + 2.376153243946*np.sin(0.451582705289455*s - 0.252573031963569) - 1.65600148666407*np.sin(0.956994426515978*s - 0.708420375360123) - 7.97783160006447*np.cos(0.184501965675006*s) + 1.65600148666407*np.cos(0.594932778023209*s) + 1.65600148666407*np.cos(0.859238155913655*s) + np.cos(1.52297301362374*s**2) + np.cos(s*(1.59664395934235 - s)) + np.cos(s*(2*s + 0.258012275465596)) + np.cos(s*(np.asin(np.cos(s)) + 2)) + 1.65600148666407*np.tanh(np.cos(0.26580222883408*s)) + np.tanh(np.cos(1.2834777179177*s)) + np.tanh(np.cos(s**(1/4)*(0.0584052888375429 - s))) + 2.376153243946*np.acos(np.sin(0.517512499805315*s + 0.591096921153889)) + 1.65600148666407*np.asin(np.cos(0.25*s)) + np.asin(np.cos(0.983155114639505*np.sqrt(s) + 0.983155114639505*s)) - 2.69148562467853
 
 
         plot_func_eqn = r"$z(s) = 12.47\cdot s\cdot \left(\sqrt{\operatorname{sech}{\left(s \right)}} - 0.04\right) - 0.06\cdot s\cdot \sin{\left(0.26\cdot s \right)} - 0.35\cdot s\cdot \tanh{\left(\sin{\left(1.09\cdot \sqrt{s} \right)} \right)} - 5.44\cdot \sin{\left(0.37\cdot s \right)} + 1.72\cdot \sin{\left(0.71\cdot s \right)} + 1.72\cdot \sin{\left(0.64\cdot \sqrt{s}\cdot \sin{\left(\sqrt{s} \right)} \right)} + \sin{\left(s\cdot \left(\operatorname{acos}{\left(\sin{\left(s \right)} \right)} - 0.27\right) \right)} + \sin{\left(s\cdot \cos{\left(\operatorname{sech}{\left(0.01\cdot s \right)} \right)} \right)} + \sin{\left(\left(- s - 0.56\right)\cdot \left(\tanh{\left(s \right)} - 0.37\right) \right)} - \sin{\left(1.02\cdot \sqrt{s} + 1.02\cdot s \right)} + 27.86\cdot \sin{\left(0.14\cdot s + 0.14\cdot \sin{\left(\sqrt{s} \right)} \right)} + 2.38\cdot \sin{\left(0.45\cdot s - 0.25 \right)} - 1.72\cdot \sin{\left(0.96\cdot s - 0.7 \right)} - 7.96\cdot \cos{\left(0.18\cdot s \right)} + 1.72\cdot \cos{\left(0.86\cdot s \right)} + \cos{\left(1.52\cdot s^{2} \right)} + \cos{\left(s\cdot \left(1.6 - s\right) \right)} + \cos{\left(s\cdot \left(2\cdot s + 0.26\right) \right)} + \cos{\left(s\cdot \left(\operatorname{asin}{\left(\cos{\left(s \right)} \right)} + 2\right) \right)} + 1.72\cdot \tanh{\left(\cos{\left(0.27\cdot s \right)} \right)} + \tanh{\left(\cos{\left(1.28\cdot s \right)} \right)} + 2.38\cdot \operatorname{acos}{\left(\sin{\left(0.52\cdot s + 0.58 \right)} \right)} + 1.72\cdot \operatorname{asin}{\left(\cos{\left(0.25\cdot s \right)} \right)} + 1.72\cdot \operatorname{asin}{\left(\cos{\left(0.59\cdot s \right)} \right)} + \operatorname{asin}{\left(\cos{\left(0.98\cdot \sqrt{s} + 0.98\cdot s \right)} \right)} - 2.69$".replace("x_{0}","s")
