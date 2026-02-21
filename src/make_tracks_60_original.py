@@ -94,7 +94,6 @@ plot_title = "Schwarts space tracks"
 
 chunk_size = 4
 
-
 #if we wanted to make a different volume in fourier space, we could easily make a new function, ie. sample_from_cube or something analogous 
 def sample_from_ball(chunk_size, max_radius, min_radius, center = np.zeros(3)):
     points = []
