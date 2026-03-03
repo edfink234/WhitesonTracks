@@ -8,31 +8,6 @@ def cylindrical_to_cartesian(r, phi, z):
     y = r * np.sin(phi)
     return x, y, z
 
-def sig_cylindrical_to_cartesian(r, phi, sigma_r, sigma_phi):
-    """
-    Propagate variances for x = r cosφ, y = r sinφ
-    Assume cov(r,φ)=0 for simplicity.
-      dx = cosφ * dr - r sinφ * dφ
-      Var(dx) = cos^2φ Var(r) + (r^2 sin^2φ) Var(φ)
-
-      dy = sinφ * dr + r cosφ * dφ
-      Var(dy) = sin^2φ Var(r) + (r^2 cos^2φ) Var(φ)
-    Inputs may be scalars or arrays; returns sigma_x, sigma_y
-    """
-    cosφ = np.cos(phi)
-    sinφ = np.sin(phi)
-    var_r = np.asarray(sigma_r)**2
-    var_phi = np.asarray(sigma_phi)**2
-
-    var_x = (cosφ**2) * var_r + ( (r**2) * (sinφ**2) ) * var_phi
-    var_y = (sinφ**2) * var_r + ( (r**2) * (cosφ**2) ) * var_phi
-
-    # prevent tiny negative rounding; clip
-    var_x = np.maximum(var_x, 1e-16)
-    var_y = np.maximum(var_y, 1e-16)
-
-    return np.sqrt(var_x), np.sqrt(var_y)
-
 def load_single_track(csv_path):
     df = pd.read_csv(csv_path)
 

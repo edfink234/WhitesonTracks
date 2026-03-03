@@ -33,7 +33,7 @@ Schwartz_train_test_on_disjoint_Sets = os.getenv('DISJOINT', False)
 start_train_dim = 0
 start_test_dim = 4
 input_dir = '/pscratch/sd/l/lcondren/Event_files_93000'
-output_dir = '/pscratch/sd/l/lcondren/combined_hit_particle_files'
+output_dir = '/Users/edwardfinkelstein/SDSU_UCI/WhitesonResearch/TrackProject/tracks_for_ed'
 
 
 #Don't change this. Bc of how loops work Dim = n would really be interpreted as Dim = n-1 without this
@@ -117,7 +117,9 @@ def make_tracks_from_fourier_balls(chunk_size, fourierDim, radii, min_radii, cen
     hyper_fourier_points = []
     for dimension in range(fourierDim):
         hyper_fourier_points.append(sample_from_ball(chunk_size,max_radius = radii[dimension], min_radius = min_radii[dimension],center=centers[dimension]))
-    #print(len(hyper_fourier_points))
+    print(len(hyper_fourier_points))
+    print(hyper_fourier_points)
+    exit()
     return np.array(hyper_fourier_points)
 
 def fourierExpand(fourierDim, Lambda, t, chunk_size = chunk_size):

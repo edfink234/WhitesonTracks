@@ -7,6 +7,7 @@ import json, time, subprocess
 import re
 from datetime import datetime
 import glob
+from os import system
 
 INPUTS = {
     # Required in practice
@@ -122,7 +123,7 @@ fourierDimValidate = 1
 intersection_of_sets = 4
 signal_PID = 15
 bField = 1
-max_B_radius = np.max(ATLASradii)
+max_B_radius = np.max(ATLASradii)-.1
 Schwartz_train_test_on_disjoint_Sets = INPUTS.get('DISJOINT', False)
 start_train_dim = 0
 start_test_dim = 4
@@ -219,7 +220,15 @@ def make_tracks_from_fourier_balls(chunk_size, fourierDim, radii, min_radii, cen
     hyper_fourier_points = []
     for dimension in range(fourierDim):
         hyper_fourier_points.append(sample_from_ball(chunk_size,max_radius = radii[dimension], min_radius = min_radii[dimension],center=centers[dimension]))
-    #print(len(hyper_fourier_points))
+    print(len(hyper_fourier_points))
+    print(hyper_fourier_points[0].shape)
+#    print([i.shape for i in hyper_fourier_points])
+#    print([hyper_fourier_points[0].shape == i.shape for i in hyper_fourier_points])
+#    print(all([hyper_fourier_points[0].shape == i.shape for i in hyper_fourier_points]))
+
+#    print(hyper_fourier_points.shape)
+    print(f"hyper_fourier_points = {hyper_fourier_points}")
+#    exit()
     return np.array(hyper_fourier_points)
 
 def fourierExpand(fourierDim, Lambda, t, chunk_size = chunk_size):
@@ -462,7 +471,28 @@ def tracks_cylindrical_fourier_balls(t,fourierDim, Lambda, chunk_size, radii, mi
 
     # # Stop tracking memory allocations
     # tracemalloc.stop()
-
+    print(f"r = {r}")
+    print(f"phi = {phi}")
+    print(f"z = {z}")
+    print(f"r.shape = {r.shape}")
+    print(f"phi.shape = {phi.shape}")
+    print(f"z.shape = {z.shape}")
+    
+    r_0 = r[:, 0]
+    phi_0 = phi[:, 0]
+    z_0 = z[:, 0]
+    
+    print(f"r[:, 0] = {r[:, 0]}")
+    print(f"phi[:, 0] = {phi[:, 0]}")
+    print(f"z[:, 0] = {z[:, 0]}")
+    print(f"r[:, 0].shape = {r[:, 0].shape}")
+    print(f"phi[:, 0].shape = {phi[:, 0].shape}")
+    print(f"z[:, 0].shape = {z[:, 0].shape}")
+    
+#    plt.plot(r_0, z_0)
+#    plt.show()
+    
+#    exit()
 
     return np.array(np.transpose(np.array([r,phi,z]),axes = [1,2,0]))
 
@@ -503,7 +533,21 @@ def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii, fourierDi
         Tracks = np.stack([r, phi, z], axis=2)
     else:
         Tracks = tracks_cylindrical_fourier_balls(times,fourierDim,Lambda,chunk_size,Radii, min_radii, Centers)
-    signal_hits = [] 
+#    print(f"Tracks = {Tracks}")
+#    print(f"Tracks.shape = {Tracks.shape}")
+#    Tracks_0 = Tracks[:, 0, :]
+#    Tracks_1 = Tracks[:, 1, :]
+#    Tracks_2 = Tracks[:, 2, :]
+#    print(f"Tracks_0 = {Tracks_0}")
+#    print(f"Tracks_0.shape = {Tracks_0.shape}")
+#    plt.plot(Tracks_0[:,0], Tracks_0[:,1])
+#    plt.plot(Tracks_0[:,1], Tracks_0[:,2])
+#    plt.plot(Tracks_0[:,0], Tracks_0[:,2])
+#    plt.show()
+#    exit()
+    
+    signal_hits = []
+    
     for track in range(chunk_size):
 
         #curve has shape (time steps, coordinates)
@@ -517,7 +561,11 @@ def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii, fourierDi
                 make_track_plot([curve_df], 1)
 
         intersection_points = map_curve_to_hits(curve, min_dist_to_detector_layer)
-        
+#        print(f"intersection_points = {intersection_points}")
+#        print(f"intersection_points.shape = {intersection_points.shape}")
+#        plt.plot(intersection_points[:, 0], intersection_points[:, 2], linestyle='--', marker='o')
+#        plt.show()
+#        exit()
         if ADD_HIT_NOISE and len(intersection_points) > 0:
             # intersection_points columns: r, phi, z, layer_id
             r0   = intersection_points[:, 0].astype(float)
@@ -555,9 +603,17 @@ def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii, fourierDi
             intersection_points_df["sigma_phi"] = HIT_NOISE_SIGMA_XY / r_safe
 
         #Delete everything past when the particle leaves the detector
-
+        
         intersection_points_df = intersection_points_df.loc[:intersection_points_df[(intersection_points_df['r'] >= max_B_radius)].index.min()]
         intersection_points_df = intersection_points_df.loc[:intersection_points_df[np.abs(intersection_points_df['z']) >= detector_length/2].index.min()]
+#        print(f"intersection_points_df = {intersection_points_df}")
+#        print(f"intersection_points_df.shape = {intersection_points_df.shape}")
+#        if track == 0: #MARK: First location we observed discontinuity
+#            plt.plot(intersection_points_df["r"], intersection_points_df["z"])
+#            plt.savefig("temp0.png")
+#            system("open -a Google\ Chrome temp0.png")
+#        plt.show()
+#        exit()
         if plotting and plot_hits_and_curve and track < num_plotted_samples:
             try:
                 out_file = f"{plotting_save_file}_track{track}.png"
@@ -669,6 +725,13 @@ def prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, t
     if final_iteration == False:
         signal_hits = make_list_of_hits_from_fourier_balls(chunk_size, fourierRadii, min_radii, fourierDim,times , fourierCenters,Lambda , 
                                                            min_dist_to_detector_layer)
+#        print(f"signal_hits = {signal_hits}")
+#        print(f"len(signal_hits) = {len(signal_hits)}")
+#        track_0 = signal_hits[0]
+#        plt.plot(track_0["r"], track_0["z"], linestyle='--', marker='o')
+#        plt.savefig("temp1.png",dpi=600);
+#        system("open -a Google\ Chrome temp1.png")
+#        exit()
         range_for_events = chunk_size
     elif final_iteration == True:
         range_for_events = remaining_events_after_chunks
