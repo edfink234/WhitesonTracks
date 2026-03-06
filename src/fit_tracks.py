@@ -150,56 +150,6 @@ def helix_xyz_phi(phi, p):
     z = z0 + a * (phi - phi_ref)
     return x, y, z
 
-def fit_standard_model_helix_from_phi(phi, x, y, z, *, sig_x=None, sig_y=None, sig_z=None):
-    phi = np.asarray(phi).ravel()
-    x = np.asarray(x).ravel()
-    y = np.asarray(y).ravel()
-    z = np.asarray(z).ravel()
-    n = len(phi)
-
-    # initial guesses (robust)
-    xc0, yc0 = np.mean(x), np.mean(y)
-    R0 = np.median(np.sqrt((x - xc0)**2 + (y - yc0)**2))
-    z00 = np.mean(z)
-    a0 = (z[-1] - z[0]) / (phi[-1] - phi[0] + 1e-12)
-    phi_ref0 = phi[0]
-    p0 = np.array([xc0, yc0, R0, z00, a0, phi_ref0], dtype=float)
-
-    BIG = 1e6
-    def resid(p):
-        xp, yp, zp = helix_xyz_phi(phi, p)
-        rx = xp - x
-        ry = yp - y
-        rz = zp - z
-        if sig_x is not None: rx = rx / (np.asarray(sig_x).ravel() + 1e-12)
-        if sig_y is not None: ry = ry / (np.asarray(sig_y).ravel() + 1e-12)
-        if sig_z is not None: rz = rz / (np.asarray(sig_z).ravel() + 1e-12)
-        r = np.concatenate([rx, ry, rz])
-        if not np.all(np.isfinite(r)): return np.full(3*n, BIG, dtype=float)
-        return r
-
-    # Use linear loss so residuals correspond to chi2
-    res = least_squares(resid, p0, loss="linear", xtol=1e-10, ftol=1e-10)
-    p_opt = res.x
-
-    r = resid(p_opt)
-    chi2 = float(np.sum(r**2))
-    ddof = len(p_opt)
-    dof = max(len(r) - ddof, 1)
-    chi2_red = chi2 / dof
-
-    # simple residual diagnostics
-    xp, yp, zp = helix_xyz_phi(phi, p_opt)
-    res_xyz = np.concatenate([xp - x, yp - y, zp - z])
-    diagnostics = {
-        "chi2": chi2, "chi2_red": chi2_red,
-        "res_mean": np.mean(res_xyz), "res_std": np.std(res_xyz),
-        "p_opt": p_opt, "success": res.success, "message": res.message
-    }
-    return p_opt, diagnostics
-# -------------------------------------------------------------------
-
-
 def helix_xyz(s, p):
     """
     Simple 3D helix parametrized by s:
@@ -214,78 +164,6 @@ def helix_xyz(s, p):
     y = yc + R * np.sin(th)
     z = z0 + k * s
     return x, y, z
-
-def fit_standard_model_helix(s, x, y, z, *, sig_x=None, sig_y=None, sig_z=None):
-    """
-    Fit helix to all coords at once using least_squares.
-    Returns: (p_opt, metrics_xyz)
-      metrics_xyz: dict with chi2, chi2_red, plus per-dim R2/MSE/MAE if you want.
-    """
-
-    s = np.asarray(s).ravel()
-    x = np.asarray(x).ravel()
-    y = np.asarray(y).ravel()
-    z = np.asarray(z).ravel()
-    n = len(s)
-
-    # --- initial guess (cheap + robust) ---
-    xc0, yc0 = np.mean(x), np.mean(y)
-    r0 = np.sqrt((x - xc0)**2 + (y - yc0)**2)
-    R0 = np.median(r0) if np.isfinite(np.median(r0)) else 1.0
-    omega0 = 2*np.pi / (s.max() - s.min() + 1e-9)   # ~one turn across the s-range
-    phi0 = np.arctan2(np.mean(y - yc0), np.mean(x - xc0))
-    z00 = np.mean(z)
-    k0 = (z[-1] - z[0]) / (s[-1] - s[0] + 1e-9)
-
-    p0 = np.array([xc0, yc0, R0, omega0, phi0, z00, k0], dtype=float)
-
-    BIG = 1e6
-
-    def resid(p):
-        with np.errstate(all="ignore"):
-            xp, yp, zp = helix_xyz(s, p)
-
-        if (not np.all(np.isfinite(xp))) or (not np.all(np.isfinite(yp))) or (not np.all(np.isfinite(zp))):
-            return np.full(3*n, BIG, dtype=float)
-
-        rx = xp - x
-        ry = yp - y
-        rz = zp - z
-
-        if sig_x is not None:
-            rx = rx / np.asarray(sig_x).ravel()
-        if sig_y is not None:
-            ry = ry / np.asarray(sig_y).ravel()
-        if sig_z is not None:
-            rz = rz / np.asarray(sig_z).ravel()
-
-        r = np.concatenate([rx, ry, rz])
-        if not np.all(np.isfinite(r)):
-            return np.full(3*n, BIG, dtype=float)
-        return r
-
-    res = least_squares(resid, p0, loss="soft_l1")
-    p_opt = res.x
-
-    # compute chi2 from weighted residuals (or unweighted if no sigmas)
-    r = resid(p_opt)
-    chi2 = np.sum(r**2)
-    ddof = len(p_opt)
-    dof = max(len(r) - ddof, 1)
-    chi2_red = chi2 / dof
-
-    # optional: per-dim R2 for sanity / label tie-breaks
-    xp, yp, zp = helix_xyz(s, p_opt)
-    mx = regression_metrics(x, xp, sigma=sig_x, ddof=ddof if sig_x is not None else 0)
-    my = regression_metrics(y, yp, sigma=sig_y, ddof=ddof if sig_y is not None else 0)
-    mz = regression_metrics(z, zp, sigma=sig_z, ddof=ddof if sig_z is not None else 0)
-
-    metrics_xyz = {
-        "chi2": chi2,
-        "chi2_red": chi2_red,
-        "mx": mx, "my": my, "mz": mz,
-    }
-    return p_opt, metrics_xyz
 
 def r2_score_1d(y_true, y_pred):
     """
@@ -346,28 +224,31 @@ def load_sigmas_for_event(track_folder: str, event_num: int):
     return sig_x, sig_y, sig_z, n_hits
 
 def sympy_expr_to_pysr_guess(expr, *, pysr_var="x0"):
-    """
-    Convert a SymPy expression (with numeric constants) into a PySR guess string.
-    Assumes your independent variable is the only free symbol in expr.
-    """
     expr = sp.sympify(expr)
-
     free = list(expr.free_symbols)
     if len(free) != 1:
-        raise ValueError(f"Expected 1 free symbol in expr for PySR guess; got {free}")
-
-    # rename that symbol to x0 so PySR understands it
+        raise ValueError(f"Expected 1 free symbol; got {free}")
     expr = expr.xreplace({free[0]: sp.Symbol(pysr_var)})
 
     s = sp.sstr(expr).replace("**", "^")
-    # --- avoid unary minus at the start (PySR parser can choke if '-' not in unary ops) ---
-    s_strip = s.lstrip()
-    if s_strip.startswith("-"):
-        # turn "-(...)" or "-x0*..." into "0-(...)" which uses binary '-'
+
+    # 1) leading unary minus -> binary minus
+    if s.lstrip().startswith("-"):
         s = "0" + s
 
-    # also normalize "+ -something" into "- something" (binary minus)
+    # 2) "+ -something" -> "- something" (binary minus)
     s = s.replace("+ -", "- ")
+
+    # 3) "(-something" -> "(0-something"  (unary minus inside parentheses)
+    s = s.replace("(-", "(0-")
+
+    # 4) "sin(-x0)" or ", -x0" -> "sin(0-x0)" / ", 0-x0"
+    s = s.replace(",-", ",0-").replace(", -", ", 0-")
+
+    # 5) negative exponents: "x0^-1" or "x0^(-1)" -> "x0^(0-1)"
+    s = re.sub(r"\^\-(\d+(\.\d+)?)", r"^(0-\1)", s)
+    s = s.replace("^(-", "^(0-")
+
     return s
 
 def _chi2_red(y, yhat, sigma, k_params=0):
@@ -430,10 +311,12 @@ def fit_until_both_conditions(
         total_iters += step
 
         # Predictions
-        yhat = model.predict(s)
+        yhat = np.asarray(model.predict(s))
+        if np.iscomplexobj(yhat):
+            yhat = yhat.real.astype(float)
 
-        # R² (unweighted unless you implement weighted R²)
-        R2 = model.score(s, y)
+        # don't use model.score (it will choke on complex); compute R2 ourselves
+        R2 = r2_score_1d(y, yhat)
         if R2 > best_R2:
             best_R2 = R2
             print(f"New best R2 = {best_R2:.3f}")
@@ -746,20 +629,21 @@ if __name__ == '__main__':
     create_dataset_only = False
     TEMPLATE_PATH = "track_templates.pkl"
     printTemplatesOnly = False
-    templates_to_delete = {}
+    templates_to_delete = {}#{"x_templates": set(range(18)), "y_templates": set(range(14)), "z_templates": set(range(13))}
     ADD_FUNC_TO_TEMPLATES = create_dataset_only and False
     R2_THRESHOLD = 0.997
-    RunPySR = False   # Whether to enable (True) or disable (False) PySR discovery
-    MaxPySRIters = 100
+    RunPySR = True   # Whether to enable (True) or disable (False) PySR discovery
+    MaxPySRIters = 200
     num_tracks = 5
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
     
-    track_dataset_idx = 0
+    track_dataset_idx = 3
     out_html = [
         "v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html",
         "v1_noiseless_69000.html",
-        "v20260202_142140__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html"
+        "v20260202_142140__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html",
+        "v20260305_002410__train5_test5__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html"
     ]
     track_folder = [f"../tracks_for_ed/{i[:-5]}" for i in out_html]
     out_html = out_html[track_dataset_idx]
@@ -767,7 +651,8 @@ if __name__ == '__main__':
     dataset_labels = [
         "v20260122_163839 train/test (noise XY=0.01, Z=0.01)",
         "v1_noiseless_69000 (no sigma columns)",
-        "v20260202_142140 train/test (noise XY=0.01, Z=0.01) Standard Model"
+        "v20260202_142140 train/test (noise XY=0.01, Z=0.01) Standard Model",
+        "v20260305_002410 train/test (noise XY=0.01, Z=0.01)"
     ]
     dataset_label = dataset_labels[track_dataset_idx]
     is_standard_model_dataset = ("standardModel" in out_html)
@@ -798,7 +683,7 @@ if __name__ == '__main__':
                     nparams = len(t.get("param_syms", []))
                     expr_s = sp.sstr(expr) if expr is not None else "<no expr>"
                     expr_s = (expr_s[:200] + "...") if len(expr_s) > 200 else expr_s
-                    print(f"[{i:3d}] nparams={nparams:2d}  {expr_s}")
+                    print(f"[{i:3d}] nparams ={nparams:2d}:  {expr_s}")
 
             if templates_to_delete:
                 # ---- delete selected indices + write back ----
@@ -1062,9 +947,9 @@ if __name__ == '__main__':
 
     model_kwargs = dict(
         niterations=100,
-        binary_operators=["+", "-", "*", "/", "^"],
-        unary_operators=["neg", "sin", "cos", "exp", "tanh", "sqrt", "log", "sech(x) = 1/cosh(x)"],
-        extra_sympy_mappings={"sech": lambda x: 1/sp.cosh(x)},
+        binary_operators=["+", "-", "*"],
+        unary_operators=["neg", "sin", "cos", "tanh", "sqrt", "sech"],
+        extra_sympy_mappings={"sech": lambda x: sp.sech(x)},
         maxsize=9,
         model_selection="accuracy",
         elementwise_loss="loss(x, y) = (x - y)^2",
@@ -1465,7 +1350,7 @@ if __name__ == '__main__':
         if is_standard_model_dataset and (sm_z is not None):
             axes[2].plot(s_all, z_sm, linewidth=2, linestyle="--", label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$")
         axes[2].set_ylabel("$z$")
-        axes[2].set_xlabel("hit index")
+        axes[2].set_xlabel("normalized arc length") 
         axes[2].legend(fontsize=8)
 
         plt.tight_layout()
