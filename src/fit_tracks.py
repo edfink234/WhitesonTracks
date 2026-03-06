@@ -633,7 +633,7 @@ if __name__ == '__main__':
     ADD_FUNC_TO_TEMPLATES = create_dataset_only and False
     R2_THRESHOLD = 0.997
     RunPySR = True   # Whether to enable (True) or disable (False) PySR discovery
-    MaxPySRIters = 200
+    MaxPySRIters = 100
     num_tracks = 5
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
