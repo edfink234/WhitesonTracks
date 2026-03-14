@@ -626,7 +626,7 @@ if __name__ == '__main__':
     np.sech = lambda x: 1/np.cosh(x)
     OPEN_PNGS = False
     OPEN_HTML = True
-    create_dataset_only = False
+    create_dataset_only = True
     TEMPLATE_PATH = "track_templates.pkl"
     printTemplatesOnly = False
     templates_to_delete = {}#{"x_templates": set(range(18)), "y_templates": set(range(14)), "z_templates": set(range(13))}
@@ -919,7 +919,7 @@ if __name__ == '__main__':
     
     if create_dataset_only:
         base_path = "../stubborn_track_csvs"
-        track_number = 3
+        track_number = 5
         assert(track_number <= num_tracks)
         file_path = f"{base_path}/{out_html[:-5]}event10000000{track_number}-hits_Z.csv"
         coord = file_path[-5].lower()
