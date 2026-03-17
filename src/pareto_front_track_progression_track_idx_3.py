@@ -2,10 +2,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Data extracted from your log
-max_sizes = [9, 17, 24, 34, 43, 53, 62, 64, 70, 71]
-sse_values = [8929.28, 1434, 125.605, 63.3617, 47.1009, 13.0276, 9.09682, 6.02855, 5.13096, 4.91967]
+max_sizes = [9, 17, 24, 34, 43, 53, 62, 64, 70, 71, 79, 81, 91, 99]
+sse_values = [8929.28, 1434, 125.605, 63.3617, 47.1009, 13.0276, 9.09682, 6.02855, 5.13096, 4.91967, 3.75413, 3.28463, 3.21014, 3.13547]
               
 depths = range(4, 4+len(max_sizes))
+print(f"depths = {depths}")
 plt.figure(figsize=(10, 6))
 
 # Plotting the Pareto Front
@@ -13,7 +14,7 @@ plt.plot(max_sizes, sse_values, marker='o', linestyle='-', color='#2c3e50', line
 
 # Annotations for Old Progression
 for i, d in enumerate(depths):
-    if d in [4, 10]:
+    if d in [4, 10, 17]:
         plt.annotate(f'Depth {d}', (max_sizes[i], sse_values[i]), textcoords="offset points", xytext=(0,10), ha='center', color='#2c3e50')
 
 # Log scale for Y-axis often makes SR Pareto plots easier to read
