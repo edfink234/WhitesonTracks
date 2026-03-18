@@ -626,7 +626,7 @@ if __name__ == '__main__':
     np.sech = lambda x: 1/np.cosh(x)
     OPEN_PNGS = False
     OPEN_HTML = True
-    create_dataset_only = False
+    create_dataset_only = True
     TEMPLATE_PATH = "track_templates.pkl"
     printTemplatesOnly = False
     templates_to_delete = {}#{"x_templates": set(range(18)), "y_templates": set(range(14)), "z_templates": set(range(13))}
@@ -929,7 +929,7 @@ if __name__ == '__main__':
         np.asin = np.arcsin; np.acos = np.arccos;
         eps = .02
         w = 0.28
-        plot_func =      -sp.sqrt(sp.acos(s) + 0.118067003555379) + (((sp.sech(s - 2.00025944997834)) + 1.2919775391911)*(15.4597809611565*sp.sin(5.38484588599688*s) - 5.79425323427678*sp.sin(9.84028492687462*s) - 13.1012000763942*sp.sin(13.4000533974842*s) + sp.cos(32.9690359373047*s)) - 0.511742650258901*sp.sin(26.7019167669519*sp.acos(s)) - 0.677973884626763*sp.cos(92.475900215986*sp.cos(s)) + sp.acos(-sp.sin(2.2353635651867*s)))*(sp.sech(0.510347809130162*sp.cos(3.35155792947442*s))) + sp.sqrt(sp.acos(s)) + sp.acos(s) - sp.acos(s - 0.000539567978735189) - sp.asin((sp.sech(sp.tanh(sp.cos(14.7529124664426*s))))) - 5.7943242121179 if fitPlotFunc else lambda s: -np.sqrt(np.acos(s) + 0.118067003555379) + (((np.sech(s - 2.00025944997834)) + 1.2919775391911)*(15.4597809611565*np.sin(5.38484588599688*s) - 5.79425323427678*np.sin(9.84028492687462*s) - 13.1012000763942*np.sin(13.4000533974842*s) + np.cos(32.9690359373047*s)) - 0.511742650258901*np.sin(26.7019167669519*np.acos(s)) - 0.677973884626763*np.cos(92.475900215986*np.cos(s)) + np.acos(-np.sin(2.2353635651867*s)))*(np.sech(0.510347809130162*np.cos(3.35155792947442*s))) + np.sqrt(np.acos(s)) + np.acos(s) - np.acos(s - 0.000539567978735189) - np.asin((np.sech(np.tanh(np.cos(14.7529124664426*s))))) - 5.7943242121179
+        plot_func =      -s + 1.57064543447663*((sp.sin(0.162506062621662*s) + 1.05773522677455)*(14.7952070077694*sp.sin(5.38484588599688*s) - 5.28968615115117*sp.sin(9.81799848956101*s) - 12.691310873955*sp.sin(13.4000533974842*s) + sp.cos(32.9690359373047*s)) - 0.29135577098586*sp.sin(26.7019167669519*sp.acos(s)) - 0.418000770206229*sp.cos(92.475900215986*sp.cos(s)) + sp.acos(-sp.sin(3.03674576706833*s)))*(sp.sech(0.590587071636204*sp.cos(3.11025272853807*s))) + 1.57064543447663*sp.sqrt(sp.acos(s)) - 1.57064543447663*sp.acos(0.00578697112869957 - (sp.sech(s))) + sp.acos(sp.cos(s - 0.0187981230539134)) - sp.asin(sp.sqrt(s)) - 1.57064543447663*sp.asin((sp.sech(sp.tanh(sp.cos(14.7529124664426*s))))) - 3.29169038437048 if fitPlotFunc else lambda s: -s + 1.57064543447663*((np.sin(0.162506062621662*s) + 1.05773522677455)*(14.7952070077694*np.sin(5.38484588599688*s) - 5.28968615115117*np.sin(9.81799848956101*s) - 12.691310873955*np.sin(13.4000533974842*s) + np.cos(32.9690359373047*s)) - 0.29135577098586*np.sin(26.7019167669519*np.acos(s)) - 0.418000770206229*np.cos(92.475900215986*np.cos(s)) + np.acos(-np.sin(3.03674576706833*s)))*(np.sech(0.590587071636204*np.cos(3.11025272853807*s))) + 1.57064543447663*np.sqrt(np.acos(s)) - 1.57064543447663*np.acos(0.00578697112869957 - (np.sech(s))) + np.acos(np.cos(s - 0.0187981230539134)) - np.asin(np.sqrt(s)) - 1.57064543447663*np.asin((np.sech(np.tanh(np.cos(14.7529124664426*s))))) - 3.29169038437048
 
         plot_func_eqn = r"$z(s)$".replace("x_{0}","s")
 #        plot_func = None
