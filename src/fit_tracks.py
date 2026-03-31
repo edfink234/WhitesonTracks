@@ -12,6 +12,48 @@ import json
 import re
 import pandas as pd
 import math
+import glob
+USE_K = False
+
+def autoscan_seed_templates(x_templates, y_templates, z_templates):
+    """
+    Scan CWD for *_template.pkl files and append their templates
+    into the appropriate template lists.
+    """
+    pkl_paths = glob.glob("*_template.pkl") + glob.glob("../stubborn_track_csvs/*_template.pkl")
+    for path in pkl_paths:
+        try:
+            with open(path, "rb") as f:
+                obj = pickle.load(f)
+        except Exception as e:
+            print(f"[autoscan] Skipping {path}: {e}")
+            continue
+
+        template = obj.get("template", None)
+        coord = obj.get("coord", None)
+
+        if template is None or coord not in ("x", "y", "z"):
+            print(f"[autoscan] Skipping {path}: invalid format")
+            continue
+
+        # apply seed_params → init_params
+        template = template_with_seed_params(template)
+
+        # avoid duplicates via signature
+        sig_new = template_signature(template)
+
+        if coord == "x":
+            if not any(template_signature(t) == sig_new for t in x_templates):
+                x_templates.append(template)
+                print(f"[autoscan] Added seed template to x_templates from {path}")
+        elif coord == "y":
+            if not any(template_signature(t) == sig_new for t in y_templates):
+                y_templates.append(template)
+                print(f"[autoscan] Added seed template to y_templates from {path}")
+        elif coord == "z":
+            if not any(template_signature(t) == sig_new for t in z_templates):
+                z_templates.append(template)
+                print(f"[autoscan] Added seed template to z_templates from {path}")
 
 def _fmt_float_latex(x: float, sig: int = 3, sci_cut: float = 1e-3) -> str:
     """Return latex for a float. Use scientific notation if |x| < sci_cut and x != 0."""
@@ -430,13 +472,46 @@ def make_parametric_template(expr, s_name="s"):
         "init_params": init_params,
     }
 
+def template_with_seed_params(template):
+    """
+    Return a copy of template where seed_params, if present, override init_params.
+    """
+    t = dict(template)
+    if "seed_params" in t and t["seed_params"] is not None:
+        t["init_params"] = np.asarray(t["seed_params"], dtype=float)
+    return t
+    
+def sanitize_prediction(y_pred, *, imag_tol=1e-8):
+    """
+    Convert predictions to a usable real float array.
+    Accept small imaginary numerical noise; reject genuinely complex outputs.
+    """
+    y_pred = np.asarray(y_pred)
+
+    if np.iscomplexobj(y_pred):
+        max_imag = np.nanmax(np.abs(np.imag(y_pred)))
+        if not np.isfinite(max_imag) or max_imag > imag_tol:
+            return None
+        y_pred = np.real(y_pred)
+
+    y_pred = np.asarray(y_pred, dtype=float)
+
+    if not np.all(np.isfinite(y_pred)):
+        return None
+
+    return y_pred
+
 def fit_template_to_data(template, s_data, y_data, *, sigma=None):
     """
     Optimize parameters and return:
       (metrics_dict, best_params, expr_fitted, y_pred)
 
     metrics_dict has: R2, MSE, MAE, chi2, chi2_red
+
+    If seed_params are present, evaluate them directly as a candidate solution.
+    Then run least_squares and keep whichever result is better.
     """
+    template   = template_with_seed_params(template)
     expr_param = template["expr"]
     s_sym      = template["s_sym"]
     param_syms = template["param_syms"]
@@ -447,18 +522,18 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None):
 
     # Build f(s, *a)
     f = sp.lambdify((s_sym, *param_syms), expr_param, "numpy")
-    
+
     BIG = 1e6  # penalty magnitude for invalid parameter regions
-    
+
     def residuals(p):
         with np.errstate(all="ignore"):
             y_pred = f(s_data, *p)
 
-        # Force finite residuals even if model blows up
-        if (not np.all(np.isfinite(y_pred))) or np.any(np.iscomplex(y_pred)):
+        y_pred = sanitize_prediction(y_pred)
+        if y_pred is None:
             return np.full_like(y_data, BIG, dtype=float)
 
-        r = (y_pred - y_data).real.astype(float)
+        r = (y_pred - y_data).astype(float)
 
         if sigma is not None:
             sig = np.asarray(sigma).ravel()
@@ -466,36 +541,89 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None):
                 raise ValueError(f"sigma shape {sig.shape} must match y shape {y_data.shape}")
             r = r / sig
 
-        # Guard against sigma producing inf/nan too
         if not np.all(np.isfinite(r)):
             return np.full_like(y_data, BIG, dtype=float)
 
         return r
 
+    def evaluate_params(p):
+        """
+        Evaluate a concrete parameter vector p and return
+        (metrics, p_used, expr_used, y_pred_used), or None if invalid.
+        """
+        with np.errstate(all="ignore"):
+            y_pred = f(s_data, *p)
+
+        y_pred = sanitize_prediction(y_pred)
+        if y_pred is None:
+            return None
+        metrics = regression_metrics(y_data, y_pred, sigma=sigma, ddof=len(p)*USE_K)
+        subs_dict = {sym: val for sym, val in zip(param_syms, p)}
+        expr_used = expr_param.subs(subs_dict)
+        return metrics, np.asarray(p, dtype=float), expr_used, y_pred
+
+    def better(a_metrics, b_metrics):
+        """
+        Return True if a_metrics is better than b_metrics.
+        Match your existing global logic:
+          - weighted: chi2_red closest to 1 wins, tie-break by R2
+          - unweighted: higher R2 wins
+        """
+        if b_metrics is None:
+            return True
+
+        if sigma is not None:
+            da = abs(a_metrics["chi2_red"] - 1.0)
+            db = abs(b_metrics["chi2_red"] - 1.0)
+            if da != db:
+                return da < db
+            return a_metrics["R2"] > b_metrics["R2"]
+        else:
+            return a_metrics["R2"] > b_metrics["R2"]
+
     # If there are no parameters, don't call least_squares
     if len(param_syms) == 0:
         with np.errstate(all="ignore"):
-            y_pred = f(s_data)   # <-- call f with ONLY s_data
+            y_pred = f(s_data)
 
-        # guard like you do elsewhere
-        if (not np.all(np.isfinite(y_pred))) or np.any(np.iscomplex(y_pred)):
+        y_pred = sanitize_prediction(y_pred)
+        if y_pred is None:
             y_pred = np.full_like(y_data, np.nan, dtype=float)
 
         metrics = regression_metrics(y_data, y_pred, sigma=sigma, ddof=0)
         return metrics, np.array([]), expr_param, y_pred
 
-    # Nonlinear least squares (robust loss helps too)
-    res = least_squares(residuals, p0, loss="soft_l1")
-    p_opt = res.x
-    y_pred = f(s_data, *p_opt)
+    # Candidate 1: seed/init params directly
+    best_result = None
+    seed_result = evaluate_params(p0)
+    if seed_result is not None:
+        best_result = seed_result
 
-    # ddof: number of fitted parameters (for reduced chi2)
-    metrics = regression_metrics(y_data, y_pred, sigma=sigma, ddof=len(p_opt))
+    # Candidate 2: optimized params from least_squares
+    try:
+        res = least_squares(residuals, p0, loss="soft_l1")
+        ls_result = evaluate_params(res.x)
+        if ls_result is not None:
+            if (best_result is None) or better(ls_result[0], best_result[0]):
+                best_result = ls_result
+    except Exception:
+        pass
 
-    subs_dict = {sym: val for sym, val in zip(param_syms, p_opt)}
-    expr_fitted = expr_param.subs(subs_dict)
+    # Fallback if both somehow failed
+    if best_result is None:
+        with np.errstate(all="ignore"):
+            y_pred = f(s_data, *p0)
 
-    return metrics, p_opt, expr_fitted, y_pred
+        y_pred = sanitize_prediction(y_pred)
+        if y_pred is None:
+            y_pred = np.full_like(y_data, np.nan, dtype=float)
+
+        metrics = regression_metrics(y_data, y_pred, sigma=sigma, ddof=len(p0))
+        subs_dict = {sym: val for sym, val in zip(param_syms, p0)}
+        expr_fitted = expr_param.subs(subs_dict)
+        return metrics, np.asarray(p0, dtype=float), expr_fitted, y_pred
+
+    return best_result
 
 def summarize_families(coord_name, templates, families, r2_list):
     """
@@ -627,6 +755,7 @@ if __name__ == '__main__':
     OPEN_PNGS = False
     OPEN_HTML = True
     create_dataset_only = True
+    add_seed_params = True
     TEMPLATE_PATH = "track_templates.pkl"
     printTemplatesOnly = False
     templates_to_delete = {}#{"x_templates": set(range(18)), "y_templates": set(range(14)), "z_templates": set(range(13))}
@@ -715,6 +844,9 @@ if __name__ == '__main__':
     else:
         print("No template file found — starting with empty template lists.")
     
+    print("Now, autoscanning *.pkl files for templates...")
+    autoscan_seed_templates(x_templates, y_templates, z_templates)
+    
 #        z_templates.append(make_parametric_template(-34.520199*sp.sech(s**(-1.45342) - 3.00504026595319), s_name="s"))
     track_infos = []  # store per-track info for HTML
     x_eqns, y_eqns, z_eqns = [], [], []   # store final numeric expressions used
@@ -728,6 +860,122 @@ if __name__ == '__main__':
 #    print(f"len(S), len(X), len(Y), len(Z), len(F) = {(len(S), len(X), len(Y), len(Z), len(F))}")
 #    print(SIG_X_LIST[0], SIG_Y_LIST[0], SIG_Z_LIST[0]); exit()
     
+    def maybe_add_fitted_func_to_templates(plot_func, s_data, y_true, sigma, coord, s_name="s"):
+        """
+        Fit symbolic plot_func to data, and if it beats existing templates,
+        add its template.
+        """
+        if (not ADD_FUNC_TO_TEMPLATES) or (coord not in ("x", "y", "z")):
+            return None
+
+        if not hasattr(plot_func, "atoms"):
+            print("[ADD_FUNC_TO_TEMPLATES] plot_func is not a SymPy expression; skipping.")
+            return None
+
+        template = make_parametric_template(plot_func, s_name=s_name)
+        metrics, p_opt, expr_fitted, y_pred = fit_template_to_data(
+            template, s_data, y_true, sigma=sigma
+        )
+
+        if coord == "x":
+            coord_templates = x_templates
+        elif coord == "y":
+            coord_templates = y_templates
+        else:
+            coord_templates = z_templates
+
+        CHI2_RED_TARGET = 1.0
+
+        def better(a, b):
+            if b is None:
+                return True
+            if sigma is not None:
+                da = abs(a["chi2_red"] - CHI2_RED_TARGET)
+                db = abs(b["chi2_red"] - CHI2_RED_TARGET)
+                if da != db:
+                    return da < db
+                return a["R2"] > b["R2"]
+            else:
+                return a["R2"] > b["R2"]
+
+        best_old = None
+        for t_old in coord_templates:
+            try:
+                m_old, _, _, _ = fit_template_to_data(t_old, s_data, y_true, sigma=sigma)
+            except Exception:
+                continue
+            if better(m_old, best_old):
+                best_old = m_old
+
+        is_best = better(metrics, best_old)
+
+        if is_best:
+            new_sig = template_signature(template)
+            already = any(template_signature(t) == new_sig for t in coord_templates)
+            if not already:
+                coord_templates.append(template)
+                save_obj = {
+                    "x_templates": x_templates,
+                    "y_templates": y_templates,
+                    "z_templates": z_templates,
+                }
+                with open(TEMPLATE_PATH, "wb") as f:
+                    pickle.dump(save_obj, f)
+
+                print(f"[ADD_FUNC_TO_TEMPLATES] Added fitted {coord}(s) template and saved to {TEMPLATE_PATH}.")
+            else:
+                print(f"[ADD_FUNC_TO_TEMPLATES] Fitted {coord}(s) template already exists; not adding.")
+
+        return {
+            "template": template,
+            "metrics": metrics,
+            "p_opt": p_opt,
+            "expr_fitted": expr_fitted,
+            "y_pred": y_pred,
+        }
+
+
+    def maybe_add_seeded_func_to_templates(plot_func, coord, s_name="s"):
+        """
+        Add symbolic plot_func as a template WITHOUT fitting.
+        Preserves the parameters already present in plot_func as init_params/seed_params.
+        """
+        if (not ADD_FUNC_TO_TEMPLATES) or (coord not in ("x", "y", "z")):
+            return None
+
+        if not hasattr(plot_func, "atoms"):
+            print("[ADD_FUNC_TO_TEMPLATES] plot_func is not a SymPy expression; skipping.")
+            return None
+
+        template = make_parametric_template(plot_func, s_name=s_name)
+        template["seed_params"] = template["init_params"].copy()
+
+        if coord == "x":
+            coord_templates = x_templates
+        elif coord == "y":
+            coord_templates = y_templates
+        else:
+            coord_templates = z_templates
+
+        new_sig = template_signature(template)
+        already = any(template_signature(t) == new_sig for t in coord_templates)
+
+        if not already:
+            coord_templates.append(template)
+            save_obj = {
+                "x_templates": x_templates,
+                "y_templates": y_templates,
+                "z_templates": z_templates,
+            }
+            with open(TEMPLATE_PATH, "wb") as f:
+                pickle.dump(save_obj, f)
+
+            print(f"[ADD_FUNC_TO_TEMPLATES] Added seeded {coord}(s) template and saved to {TEMPLATE_PATH}.")
+        else:
+            print(f"[ADD_FUNC_TO_TEMPLATES] Seeded {coord}(s) template already exists; not adding.")
+
+        return template
+        
     def create_stubborn_track_dataset(
         X, Y,
         file_path="",
@@ -740,7 +988,8 @@ if __name__ == '__main__':
         sigma=None,
         coord="x",
         ylim = None,
-        legend_size = 10
+        legend_size = 10,
+        add_seed_params=False
     ):
         stubborn_track_dataset = np.hstack((X.reshape(-1,1), Y.reshape(-1,1)))
         assert stubborn_track_dataset.shape[0] == X.shape[0]
@@ -752,6 +1001,23 @@ if __name__ == '__main__':
             print(f"Data saved to {file_path}")
         else:
             print(stubborn_track_dataset)
+            
+        if file_path and add_seed_params and (plot_func is not None) and hasattr(plot_func, "atoms"):
+            template_path = file_path.replace(".csv", "_template.pkl")
+            template = make_parametric_template(plot_func, s_name=s_name)
+            seed_obj = {
+                "coord": coord,
+                "template": {
+                    "expr": template["expr"],
+                    "s_sym": template["s_sym"],
+                    "param_syms": template["param_syms"],
+                    "init_params": template["init_params"],
+                    "seed_params": template["init_params"].copy(),
+                }
+            }
+            with open(template_path, "wb") as f:
+                pickle.dump(seed_obj, f)
+            print(f"Template seed params saved to {template_path}")
 
         if show:
             s_data = stubborn_track_dataset[:, 0].astype(float)
@@ -775,65 +1041,22 @@ if __name__ == '__main__':
                 if plot_func is None:
                     raise ValueError("fitPlotFunc=True requires plot_func to be a SymPy expression with float seeds.")
 
-                template = make_parametric_template(plot_func, s_name=s_name)
-                metrics, p_opt, expr_fitted, y_pred = fit_template_to_data(
-                    template, s_data, y_true, sigma=sigma
-                )
+                result = maybe_add_fitted_func_to_templates(plot_func, s_data, y_true, sigma, coord, s_name=s_name)
 
-                if ADD_FUNC_TO_TEMPLATES and coord in ("x", "y", "z"):
-                    # pick the right template list for this coordinate
-                    if coord == "x":
-                        coord_templates = x_templates
-                    elif coord == "y":
-                        coord_templates = y_templates
-                    else:
-                        coord_templates = z_templates
+                if result is None:
+                    template = make_parametric_template(plot_func, s_name=s_name)
+                    metrics, p_opt, expr_fitted, y_pred = fit_template_to_data(
+                        template, s_data, y_true, sigma=sigma
+                    )
+                else:
+                    template = result["template"]
+                    metrics = result["metrics"]
+                    p_opt = result["p_opt"]
+                    expr_fitted = result["expr_fitted"]
+                    y_pred = result["y_pred"]
 
-                    # same "better" logic as fit_dimension():
-                    CHI2_RED_TARGET = 1.0
-
-                    def better(a, b):
-                        if b is None:
-                            return True
-                        if sigma is not None:
-                            da = abs(a["chi2_red"] - CHI2_RED_TARGET)
-                            db = abs(b["chi2_red"] - CHI2_RED_TARGET)
-                            if da != db:
-                                return da < db
-                            return a["R2"] > b["R2"]  # tie-break
-                        else:
-                            return a["R2"] > b["R2"]
-
-                    # compute best existing metrics on this same (s_data, y_true)
-                    best_old = None
-                    for t_old in coord_templates:
-                        try:
-                            m_old, _, _, _ = fit_template_to_data(t_old, s_data, y_true, sigma=sigma)
-                        except Exception:
-                            continue
-                        if better(m_old, best_old):
-                            best_old = m_old
-
-                    # compare and append if new beats all old
-                    is_best = better(metrics, best_old)
-
-                    # avoid duplicates by signature
-                    if is_best:
-                        new_sig = template_signature(template)
-                        already = any(template_signature(t) == new_sig for t in coord_templates)
-                        if not already:
-                            coord_templates.append(template)
-
-                            # persist immediately (because we exit() below)
-                            save_obj = {"x_templates": x_templates, "y_templates": y_templates, "z_templates": z_templates}
-                            with open(TEMPLATE_PATH, "wb") as f:
-                                pickle.dump(save_obj, f)
-
-                            print(f"[ADD_FUNC_TO_TEMPLATES] Added new {coord}(s) template and saved to {TEMPLATE_PATH}.")
-                        else:
-                            print(f"[ADD_FUNC_TO_TEMPLATES] New {coord}(s) template already exists (signature match); not adding.")
                 if not latex_eqn:
-                    s_latex = sp.Symbol("s")  # for printing
+                    s_latex = sp.Symbol("s")
                     expr_for_latex = round_floats(expr_fitted.xreplace({template["s_sym"]: s_latex}), 3)
                     latex_eqn = f"${sp.latex(expr_for_latex)}$"
 
@@ -841,7 +1064,8 @@ if __name__ == '__main__':
                 f_plot = sp.lambdify((template["s_sym"],), expr_fitted, "numpy")
                 f_plot_vals = f_plot(s_vals)
                 print(f"(s[0], f[0]) = ({s_vals[0]}, {f_plot_vals[0]})")
-                ax_main.plot(s_vals, f_plot_vals,
+                ax_main.plot(
+                    s_vals, f_plot_vals,
                     label=fr"Fit (template): $R^2={metrics['R2']:.3f}$" + "\n" + latex_eqn,
                     linewidth=1.5
                 )
@@ -854,17 +1078,33 @@ if __name__ == '__main__':
 
             else:
                 if plot_func is not None:
-                    # compute prediction on data x for residuals and for plotting continuous curve
-                    y_pred = plot_func(s_data)
-                    R2 = r2_score_1d(y_true, y_pred)
-                    s_vals = np.linspace(s_data.min(), s_data.max(), 1000)  # fixed bug (was max(vals))
-                    ax_main.plot(s_vals, plot_func(s_vals),
-                        label=fr"Fit: $R^2={R2:.3f}$" + ("\n" + latex_eqn if latex_eqn else ""),
-                        linewidth=1.5
-                    )
+                    if hasattr(plot_func, "atoms"):
+                        maybe_add_seeded_func_to_templates(plot_func, coord, s_name=s_name)
+                        f_num = sp.lambdify(sp.Symbol(s_name), plot_func, "numpy")
+                        y_pred = f_num(s_data)
+                        R2 = r2_score_1d(y_true, y_pred)
+                        metrics = regression_metrics(y_true, y_pred, sigma=sigma)
+                        print("Metrics:", metrics)
+                        s_vals = np.linspace(s_data.min(), s_data.max(), 1000)
+                        ax_main.plot(
+                            s_vals, f_num(s_vals),
+                            label=fr"Fit: $R^2={R2:.3f}$" + ("\n" + latex_eqn if latex_eqn else ""),
+                            linewidth=1.5
+                        )
+                    else:
+                        y_pred = plot_func(s_data)
+                        R2 = r2_score_1d(y_true, y_pred)
+                        metrics = regression_metrics(y_true, y_pred, sigma=sigma)
+                        print("Metrics:", metrics)
+                        s_vals = np.linspace(s_data.min(), s_data.max(), 1000)
+                        ax_main.plot(
+                            s_vals, plot_func(s_vals),
+                            label=fr"Fit: $R^2={R2:.3f}$" + ("\n" + latex_eqn if latex_eqn else ""),
+                            linewidth=1.5
+                        )
+
                     if ylim:
                         ax_main.set_ylim(*ylim)
-
             # finalize main pad
             ax_main.set_ylabel("z")
             ax_main.legend(prop={'size': legend_size})
@@ -919,7 +1159,7 @@ if __name__ == '__main__':
     
     if create_dataset_only:
         base_path = "../stubborn_track_csvs"
-        track_number = 5
+        track_number = 4
         assert(track_number <= num_tracks)
         file_path = f"{base_path}/{out_html[:-5]}event10000000{track_number}-hits_Z.csv"
         coord = file_path[-5].lower()
@@ -929,12 +1169,13 @@ if __name__ == '__main__':
         np.asin = np.arcsin; np.acos = np.arccos;
         eps = .02
         w = 0.28
-        plot_func =        s*(sp.sqrt(sp.acos(sp.sin(s + 0.689431513685724))) - 0.828300942599106*sp.asin(sp.cos(s + sp.asin(s) + 1.01921519468623))) - s*(2.59742254222139*s - sp.sin(30.4050477500066*s) - 1.48539276102318)*sp.cos(128.229040348727*s + 14.8127547645076*sp.tanh(s) + 0.581865283139841)*sp.tanh(s - 0.434679624305114)*sp.acos(s) - s + 1.72905384092489*(0.694281324200817 - sp.acos(s))*(0.999994728296499 - s**2)*(s - 0.0195669890813332)*(-4*s**2 - 0.867672467362799)*sp.cos(49.6016134939281*sp.acos(s))*sp.acos(s) + (6.79795980426192 - 0.0631678721024757*sp.sin(sp.cos(128*s + 0.233682191830807) + 1.143907686111))*(s - 1.58566583235028) + (s + 0.1574197462719)*(s + (sp.sech((sp.sech(sp.cos(129.010537305414*s - 44.3458325815834*sp.sin(s)))))))*sp.acos(s) + (s + 5.3815623685143)*sp.sin(s + sp.acos(s)) + (s**(1/4) - 4.82389869841894*sp.sqrt(sp.tanh(s)) + 0.30365128941208)*(-sp.sqrt(s) + sp.tanh(s) + 0.235122658118626) + 0.174579506171882*(sp.sqrt(s) + s - 2.61867531032089*sp.tanh(s) - 0.0618804121808699)*sp.cos(239.145007345481*s) + 2.09444735476912*(sp.sqrt(1 - sp.sin(5.46069308055838*s)**2) + (0.163431814570796*s + 0.719925010776352)*(16.8951002207091*sp.sin(5.38484588599688*s) - 5.53571036261592*sp.sin(9.81799848956101*s) - 13.6302248655058*sp.sin(13.4000533974842*s) + sp.cos(33*s)) - 0.12559511173517*sp.sin(26.7019167669519*sp.acos(s)) - 0.305453022416712*sp.cos(92.475900215986*sp.cos(s)))*sp.cos(0.505145362935909*sp.cos(3.13656065983025*s)) - 2.63913597841595*sp.sqrt(sp.tanh(s)) + sp.tanh((sp.acos(s) - 0.170918987099608)*sp.cos(s)) - 0.0401085832397505*sp.tanh(sp.tanh(sp.sin((22.4486431103211 - 53.9440436375348*sp.acos(s))*(s + 2.34553742669886)))) - 1.97619469844844*sp.tanh(sp.asin(sp.acos(sp.sin(sp.acos(s) + 0.88061075992745)))**(1/4)) + sp.acos(sp.sqrt(s)) - 1.23294606577917*sp.acos(sp.sqrt(sp.acos(sp.sqrt((sp.sech(sp.cos(s) - sp.acos(s))))))) - 2.09444735476912*sp.asin((sp.sech(sp.sin(sp.cos(14.7416061068815*s))))) if fitPlotFunc else lambda s: s*(np.sqrt(np.acos(np.sin(s + 0.689431513685724))) - 0.828300942599106*np.asin(np.cos(s + np.asin(s) + 1.01921519468623))) - s*(2.59742254222139*s - np.sin(30.4050477500066*s) - 1.48539276102318)*np.cos(128.229040348727*s + 14.8127547645076*np.tanh(s) + 0.581865283139841)*np.tanh(s - 0.434679624305114)*np.acos(s) - s + 1.72905384092489*(0.694281324200817 - np.acos(s))*(0.999994728296499 - s**2)*(s - 0.0195669890813332)*(-4*s**2 - 0.867672467362799)*np.cos(49.6016134939281*np.acos(s))*np.acos(s) + (6.79795980426192 - 0.0631678721024757*np.sin(np.cos(128*s + 0.233682191830807) + 1.143907686111))*(s - 1.58566583235028) + (s + 0.1574197462719)*(s + (np.sech((np.sech(np.cos(129.010537305414*s - 44.3458325815834*np.sin(s)))))))*np.acos(s) + (s + 5.3815623685143)*np.sin(s + np.acos(s)) + (s**(1/4) - 4.82389869841894*np.sqrt(np.tanh(s)) + 0.30365128941208)*(-np.sqrt(s) + np.tanh(s) + 0.235122658118626) + 0.174579506171882*(np.sqrt(s) + s - 2.61867531032089*np.tanh(s) - 0.0618804121808699)*np.cos(239.145007345481*s) + 2.09444735476912*(np.sqrt(1 - np.sin(5.46069308055838*s)**2) + (0.163431814570796*s + 0.719925010776352)*(16.8951002207091*np.sin(5.38484588599688*s) - 5.53571036261592*np.sin(9.81799848956101*s) - 13.6302248655058*np.sin(13.4000533974842*s) + np.cos(33*s)) - 0.12559511173517*np.sin(26.7019167669519*np.acos(s)) - 0.305453022416712*np.cos(92.475900215986*np.cos(s)))*np.cos(0.505145362935909*np.cos(3.13656065983025*s)) - 2.63913597841595*np.sqrt(np.tanh(s)) + np.tanh((np.acos(s) - 0.170918987099608)*np.cos(s)) - 0.0401085832397505*np.tanh(np.tanh(np.sin((22.4486431103211 - 53.9440436375348*np.acos(s))*(s + 2.34553742669886)))) - 1.97619469844844*np.tanh(np.asin(np.acos(np.sin(np.acos(s) + 0.88061075992745)))**(1/4)) + np.acos(np.sqrt(s)) - 1.23294606577917*np.acos(np.sqrt(np.acos(np.sqrt((np.sech(np.cos(s) - np.acos(s))))))) - 2.09444735476912*np.asin((np.sech(np.sin(np.cos(14.7416061068815*s)))))
+        plot_func =         s*(sp.sqrt(sp.acos(sp.sin(s + 0.689431513685724))) - 1.18665531897698*sp.asin(sp.cos(sp.asin(s) + 1.95554905681814))) - s*(2.46738187622476*s - sp.sin(30.4050477500066*s) - 1.40866584900466)*sp.sin(s - 0.438037481616641)*sp.cos(128.229040348727*s + 14.8127547645076*sp.tanh(s) + 0.593292380362216)*sp.acos(s) + 6.35491329634522*s*sp.sin(s + sp.acos(s)) + 0.0125484944831089*s*sp.sin(106.981200886133*s**2 - 0.342088650710925) - 1.57440054959186*s - 1.81608988820478*(0.69337634532585 - sp.acos(s))*(s - 0.0189352714115211)*(-4*s**2 - 0.882850937685156)*(s**2 - 0.978381045409015)*sp.cos(49.6016134939281*sp.acos(s))*sp.acos(s) + (s**(1/4) - 5.37626849772727*sp.sqrt(s))*(-sp.sqrt(s) + sp.tanh(s) + 0.8136544598469) - (s - 1.58566583235028)*(0.107435852640322*(sp.sech(sp.cos(128*s) - 0.358448842631776)) - 3.90785816663845) + (s + 0.086769802006066)*((sp.sech((sp.sech(sp.cos(129.010537305414*s - 44.3458325815834*sp.sin(s)))))) + 0.843647871210535)*sp.acos(s) + (0.877710225772381*s**2 + sp.tanh(sp.acos(s) - 1.31418022982521))*(sp.tanh(sp.sin(0.847809657109422*s)) - sp.asin(s) - 0.00389680302481388)*sp.sin(19.987960824369*s*(s + 12)) + 0.287200274795928*(sp.sqrt(s) + s - 2.65088602002925*sp.tanh(s) - 0.0128019120024451)*sp.cos(239.145007345481*s - 238.499640703128) + 2.11073891843981*(sp.sqrt(1 - sp.sin(5.46069308055838*s)**2) + (0.165351591788285*s + 0.713577773715253)*(16.8674987122698*sp.sin(5.38484588599688*s) - 5.52304979789996*sp.sin(9.81799848956101*s) - 13.6302248655058*sp.sin(13.4000533974842*s) + sp.cos(33*s)) - 0.125243550196568*sp.sin(26.7019167669519*sp.acos(s)) - 0.303589895006747*sp.cos(92.475900215986*sp.cos(s)))*sp.cos(0.50830318137884*sp.cos(3.13656065983025*s)) - 2*sp.sqrt(sp.sin(s)) - 0.014405562834264*sp.sin(13.6335288735705*(6.5034819269012 - s)*(s - sp.sin(s) - 2.00441786813565)*sp.asin(s)) - sp.sin(s - sp.cos(s)) + 0.00368191851082523*sp.sin(102.511237996397*sp.tanh(s) - 0.438012456017796)*sp.acos(s) + sp.sin(sp.sqrt(sp.tanh(sp.acos((sp.sech(sp.cos(s) - sp.acos(s))))))) - 0.0145423883957665*sp.cos(171.466437360444*s - 124.025106721199*sp.acos(s) + 122.152134206309) - 0.0346506431242196*sp.tanh(sp.tanh(sp.sin((22.4486431103211 - 53.9440436375348*sp.acos(s))*(s + 2.34057990591909)))) - 1.92583841903471*sp.tanh(sp.asin(sp.acos(sp.sin(sp.acos(s) + 0.88061075992745)))**(1/4)) + sp.acos(sp.sqrt(s)) - 2.11073891843981*sp.asin((sp.sech(sp.sin(sp.cos(14.7416061068815*s))))) - 0.958226850845914
 
         plot_func_eqn = r"$z(s)$".replace("x_{0}","s")
 #        plot_func = None
 #        plot_func_eqn = None
         print(*zip(S[track_number-1][:], Z[track_number-1][:]), sep = '\n')
+        print(f"number of data points = {len(S[track_number-1][:])}")
 #        N_dat = 10000
         x_dat = S[track_number-1];# x_min = min(S[track_number-1]); x_max = max(S[track_number-1]);
 #        x_dat = np.linspace(x_min, x_max, N_dat)
@@ -943,7 +1184,7 @@ if __name__ == '__main__':
         sigma_dat = SIG_Z_LIST[track_number-1];# sigma_min = min(SIG_Z_LIST[track_number-1]); sigma_max = max(SIG_Z_LIST[track_number-1]);
 #        sigma_dat = np.linspace(sigma_min, sigma_max, N_dat)
         
-        create_stubborn_track_dataset(x_dat, y_dat, file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-200, 75), sigma = sigma_dat, legend_size = 6)
+        create_stubborn_track_dataset(x_dat, y_dat, file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-200, 75), sigma = sigma_dat, legend_size = 6, add_seed_params = add_seed_params)
 
     model_kwargs = dict(
         niterations=100,
