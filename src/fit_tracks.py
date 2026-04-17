@@ -481,25 +481,49 @@ def template_with_seed_params(template):
         t["init_params"] = np.asarray(t["seed_params"], dtype=float)
     return t
     
-def sanitize_prediction(y_pred, *, imag_tol=1e-8):
+def sanitize_prediction(y_pred, *, imag_tol=1e-8, return_mask=False):
     """
     Convert predictions to a usable real float array.
-    Accept small imaginary numerical noise; reject genuinely complex outputs.
+
+    If return_mask=True:
+        returns (y_clean, invalid_mask)
+    else:
+        returns y_clean or None (old behavior)
+
+    invalid_mask = True where values are bad
     """
     y_pred = np.asarray(y_pred)
 
+    invalid_mask = np.zeros_like(y_pred, dtype=bool)
+
+    # Handle complex
     if np.iscomplexobj(y_pred):
-        max_imag = np.nanmax(np.abs(np.imag(y_pred)))
-        if not np.isfinite(max_imag) or max_imag > imag_tol:
-            return None
+        imag = np.abs(np.imag(y_pred))
+        bad_imag = (~np.isfinite(imag)) | (imag > imag_tol)
+        invalid_mask |= bad_imag
         y_pred = np.real(y_pred)
 
+    # Cast to float
     y_pred = np.asarray(y_pred, dtype=float)
 
-    if not np.all(np.isfinite(y_pred)):
-        return None
+    # Non-finite (nan/inf)
+    bad_real = ~np.isfinite(y_pred)
+    invalid_mask |= bad_real
 
-    return y_pred
+    if not return_mask:
+        if np.any(invalid_mask):
+            return None
+        return y_pred
+
+    # return_mask=True path
+    if np.all(invalid_mask):
+        return None, invalid_mask
+
+    # Replace bad values with nan for inspection
+    y_clean = y_pred.copy()
+    y_clean[invalid_mask] = np.nan
+
+    return y_clean, invalid_mask
 
 def fit_template_to_data(template, s_data, y_data, *, sigma=None):
     """
@@ -751,42 +775,59 @@ def summarize_3d_families(families_x, families_y, families_z, r2_x_all, r2_y_all
 
 if __name__ == '__main__':
     np.random.seed(0)  # Fix random seed
-    np.sech = lambda x: 1/np.cosh(x)
+    def safe_sech(x):
+        x = np.asarray(x, dtype=float)
+        out = np.zeros_like(x)
+        mask = np.abs(x) < 700
+        out[mask] = 1.0 / np.cosh(x[mask])
+        return out
+    np.sech = safe_sech
+#    np.sech = lambda x: 1/np.cosh(x)
     OPEN_PNGS = False
     OPEN_HTML = True
     create_dataset_only = True
     add_seed_params = True
     TEMPLATE_PATH = "track_templates.pkl"
     printTemplatesOnly = False
-    templates_to_delete = {}#{"x_templates": set(range(18)), "y_templates": set(range(14)), "z_templates": set(range(13))}
+    templates_to_delete = {}#{"x_templates": set(range(14,15)), "y_templates": {}, "z_templates": {}}
     ADD_FUNC_TO_TEMPLATES = create_dataset_only and True
     R2_THRESHOLD = 0.997
     RunPySR = False   # Whether to enable (True) or disable (False) PySR discovery
     MaxPySRIters = 100
-    num_tracks = 5
+    num_tracks = 10
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
     
-    track_dataset_idx = 3
+    track_dataset_idx = 4
     out_html = [
         "v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html",
         "v1_noiseless_69000.html",
         "v20260202_142140__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html",
-        "v20260305_002410__train5_test5__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html"
+        "v20260305_002410__train5_test5__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html",
+        "v20260407_091434__train5_test5__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html"
     ]
     track_folder = [f"../tracks_for_ed/{i[:-5]}" for i in out_html]
-    out_html = out_html[track_dataset_idx]
-    track_folder = track_folder[track_dataset_idx]
     dataset_labels = [
         "v20260122_163839 train/test (noise XY=0.01, Z=0.01)",
         "v1_noiseless_69000 (no sigma columns)",
         "v20260202_142140 train/test (noise XY=0.01, Z=0.01) Standard Model",
-        "v20260305_002410 train/test (noise XY=0.01, Z=0.01)"
+        "v20260305_002410 train/test (noise XY=0.01, Z=0.01)",
+        "v20260407_091434 train/test (noise XY=0.01, Z=0.01) Standard Model",
     ]
+    print(out_html, track_folder, dataset_labels, sep='\n'); exit()
+    track_folder = track_folder[track_dataset_idx]
     dataset_label = dataset_labels[track_dataset_idx]
+    out_html = out_html[track_dataset_idx]
+
     is_standard_model_dataset = ("standardModel" in out_html)
-    
+    usePhi = is_standard_model_dataset and True
+    if usePhi:
+        track_folder = track_folder.replace("standardModel", "standardModel_using_Phi")
+        dataset_label = dataset_label.replace("Standard Model", r"Standard Model ($s = \phi$)")
+        out_html = out_html.replace("standardModel", "standardModel_using_Phi")
+
     outfile_str = out_html[:-5]
+    independent_param = "phi" if usePhi else "arc"
     
     if os.path.exists(TEMPLATE_PATH):
         print("Loading existing template library...")
@@ -811,7 +852,8 @@ if __name__ == '__main__':
                     expr = t.get("expr", None)
                     nparams = len(t.get("param_syms", []))
                     expr_s = sp.sstr(expr) if expr is not None else "<no expr>"
-                    expr_s = (expr_s[:200] + "...") if len(expr_s) > 200 else expr_s
+                    num_chars = 1500
+                    expr_s = (expr_s[:num_chars] + "...") if len(expr_s) > num_chars else expr_s
                     print(f"[{i:3d}] nparams ={nparams:2d}:  {expr_s}")
 
             if templates_to_delete:
@@ -854,7 +896,7 @@ if __name__ == '__main__':
     r2_x_all, r2_y_all, r2_z_all = [], [], [] # R^2 values for each track and coordinate
 
     # now load sigma arrays too
-    S, X, Y, Z, SIG_X_LIST, SIG_Y_LIST, SIG_Z_LIST, F = load_many_tracks(track_folder, max_tracks=num_tracks)
+    S, X, Y, Z, SIG_X_LIST, SIG_Y_LIST, SIG_Z_LIST, F = load_many_tracks(track_folder, max_tracks=num_tracks, param = independent_param)
     num_tracks = len(S)
     assert((len(S), len(X), len(Y), len(Z), len(F)) == (num_tracks, num_tracks, num_tracks, num_tracks, num_tracks))
 #    print(f"len(S), len(X), len(Y), len(Z), len(F) = {(len(S), len(X), len(Y), len(Z), len(F))}")
@@ -925,7 +967,8 @@ if __name__ == '__main__':
                 print(f"[ADD_FUNC_TO_TEMPLATES] Added fitted {coord}(s) template and saved to {TEMPLATE_PATH}.")
             else:
                 print(f"[ADD_FUNC_TO_TEMPLATES] Fitted {coord}(s) template already exists; not adding.")
-
+        else:
+            print(f"Best template fit {best_old} better than attempted template fit {metrics}; NOT ADDING TEMPLATE!")
         return {
             "template": template,
             "metrics": metrics,
@@ -933,7 +976,6 @@ if __name__ == '__main__':
             "expr_fitted": expr_fitted,
             "y_pred": y_pred,
         }
-
 
     def maybe_add_seeded_func_to_templates(plot_func, coord, s_name="s"):
         """
@@ -1062,13 +1104,42 @@ if __name__ == '__main__':
 
                 # plot fitted curve on main pad
                 f_plot = sp.lambdify((template["s_sym"],), expr_fitted, "numpy")
-                f_plot_vals = f_plot(s_vals)
-                print(f"(s[0], f[0]) = ({s_vals[0]}, {f_plot_vals[0]})")
-                ax_main.plot(
-                    s_vals, f_plot_vals,
-                    label=fr"Fit (template): $R^2={metrics['R2']:.3f}$" + "\n" + latex_eqn,
-                    linewidth=1.5
-                )
+                with np.errstate(all="ignore"):
+                    f_plot_vals, bad = sanitize_prediction(f_plot(s_vals), return_mask=True)
+                    
+                if f_plot_vals is None:
+                    print("everything invalid")
+                else:
+                    if np.any(bad):
+                        print(f"{bad.sum()} / {len(bad)} points invalid")
+                        print("bad s values:", s_vals[bad])
+                        bad_s = s_vals[bad]
+
+                        subs_to_check = {
+                            "sqrt_s": sp.sqrt(s),
+                            "sqrt_1_minus_s2": sp.sqrt(1 - s**2),
+                            "acos_s": sp.acos(s),
+                            "acos_s_quarter": sp.acos(s**sp.Rational(1,4)),
+                            "asin_s": sp.asin(s),
+                            "big_sech": sp.sech(4104.2069390434*sp.tanh(s - 0.771043790235854) + 7.33665770771229),
+                            "asin_cos_sqrt": sp.asin(sp.cos(sp.sqrt(s) - 0.410731201559706)),
+                            "acos_cos_shift": sp.acos(sp.cos(4.12586583940654*s) - 5.54966373189636e-7),
+                            "acos_cos_shift_arg": sp.cos(4.12586583940654*s) - 5.54966373189636e-7,
+                        }
+
+                        for name, expr in subs_to_check.items():
+                            fn = sp.lambdify(s, expr, "numpy")
+                            with np.errstate(all="ignore"):
+                                vals = np.asarray(fn(bad_s))
+                            print(name, "all finite?", np.all(np.isfinite(vals)))
+                            if not np.all(np.isfinite(vals)):
+                                print(vals[:10])
+                    print(f"(s[0], f[0]) = ({s_vals[0]}, {f_plot_vals[0]})")
+                    ax_main.plot(
+                        s_vals, f_plot_vals,
+                        label=fr"Fit (template): $R^2={metrics['R2']:.3f}$" + "\n" + latex_eqn,
+                        linewidth=1.5
+                    )
                 if ylim:
                     ax_main.set_ylim(*ylim)
 
@@ -1159,9 +1230,12 @@ if __name__ == '__main__':
     
     if create_dataset_only:
         base_path = "../stubborn_track_csvs"
-        track_number = 1
+        track_number = 10
+        track_coord = 'X'
+        track_dict = {'X': X, 'Y': Y, 'Z': Z}
+        track_sig_dict = {'X': SIG_X_LIST, 'Y': SIG_Y_LIST, 'Z': SIG_Z_LIST}
         assert(track_number <= num_tracks)
-        file_path = f"{base_path}/{out_html[:-5]}event10000000{track_number}-hits_Z.csv"
+        file_path = f"{base_path}/{out_html[:-5]}event10000000{track_number}-hits_{track_coord}.csv"
         coord = file_path[-5].lower()
         s = sp.Symbol("s")
         print(len(S))
@@ -1172,23 +1246,31 @@ if __name__ == '__main__':
         plot_func = [ \
             s*(sp.sqrt(sp.acos(sp.sin(s + 0.689431513685724))) - 1.18665531897698*sp.asin(sp.cos(sp.asin(s) + 1.95554905681814))) - s*(2.46738187622476*s - sp.sin(30.4050477500066*s) - 1.40866584900466)*sp.sin(s - 0.438037481616641)*sp.cos(128.229040348727*s + 14.8127547645076*sp.tanh(s) + 0.593292380362216)*sp.acos(s) + 6.35491329634522*s*sp.sin(s + sp.acos(s)) + 0.0125484944831089*s*sp.sin(106.981200886133*s**2 - 0.342088650710925) - 1.57440054959186*s - 1.81608988820478*(0.69337634532585 - sp.acos(s))*(s - 0.0189352714115211)*(-4*s**2 - 0.882850937685156)*(s**2 - 0.978381045409015)*sp.cos(49.6016134939281*sp.acos(s))*sp.acos(s) + (s**(1/4) - 5.37626849772727*sp.sqrt(s))*(-sp.sqrt(s) + sp.tanh(s) + 0.8136544598469) - (s - 1.58566583235028)*(0.107435852640322*(sp.sech(sp.cos(128*s) - 0.358448842631776)) - 3.90785816663845) + (s + 0.086769802006066)*((sp.sech((sp.sech(sp.cos(129.010537305414*s - 44.3458325815834*sp.sin(s)))))) + 0.843647871210535)*sp.acos(s) + (0.877710225772381*s**2 + sp.tanh(sp.acos(s) - 1.31418022982521))*(sp.tanh(sp.sin(0.847809657109422*s)) - sp.asin(s) - 0.00389680302481388)*sp.sin(19.987960824369*s*(s + 12)) + 0.287200274795928*(sp.sqrt(s) + s - 2.65088602002925*sp.tanh(s) - 0.0128019120024451)*sp.cos(239.145007345481*s - 238.499640703128) + 2.11073891843981*(sp.sqrt(1 - sp.sin(5.46069308055838*s)**2) + (0.165351591788285*s + 0.713577773715253)*(16.8674987122698*sp.sin(5.38484588599688*s) - 5.52304979789996*sp.sin(9.81799848956101*s) - 13.6302248655058*sp.sin(13.4000533974842*s) + sp.cos(33*s)) - 0.125243550196568*sp.sin(26.7019167669519*sp.acos(s)) - 0.303589895006747*sp.cos(92.475900215986*sp.cos(s)))*sp.cos(0.50830318137884*sp.cos(3.13656065983025*s)) - 2*sp.sqrt(sp.sin(s)) - 0.014405562834264*sp.sin(13.6335288735705*(6.5034819269012 - s)*(s - sp.sin(s) - 2.00441786813565)*sp.asin(s)) - sp.sin(s - sp.cos(s)) + 0.00368191851082523*sp.sin(102.511237996397*sp.tanh(s) - 0.438012456017796)*sp.acos(s) + sp.sin(sp.sqrt(sp.tanh(sp.acos((sp.sech(sp.cos(s) - sp.acos(s))))))) - 0.0145423883957665*sp.cos(171.466437360444*s - 124.025106721199*sp.acos(s) + 122.152134206309) - 0.0346506431242196*sp.tanh(sp.tanh(sp.sin((22.4486431103211 - 53.9440436375348*sp.acos(s))*(s + 2.34057990591909)))) - 1.92583841903471*sp.tanh(sp.asin(sp.acos(sp.sin(sp.acos(s) + 0.88061075992745)))**(1/4)) + sp.acos(sp.sqrt(s)) - 2.11073891843981*sp.asin((sp.sech(sp.sin(sp.cos(14.7416061068815*s))))) - 0.958226850845914 if fitPlotFunc else lambda s: s*(np.sqrt(np.acos(np.sin(s + 0.689431513685724))) - 1.18665531897698*np.asin(np.cos(np.asin(s) + 1.95554905681814))) - s*(2.46738187622476*s - np.sin(30.4050477500066*s) - 1.40866584900466)*np.sin(s - 0.438037481616641)*np.cos(128.229040348727*s + 14.8127547645076*np.tanh(s) + 0.593292380362216)*np.acos(s) + 6.35491329634522*s*np.sin(s + np.acos(s)) + 0.0125484944831089*s*np.sin(106.981200886133*s**2 - 0.342088650710925) - 1.57440054959186*s - 1.81608988820478*(0.69337634532585 - np.acos(s))*(s - 0.0189352714115211)*(-4*s**2 - 0.882850937685156)*(s**2 - 0.978381045409015)*np.cos(49.6016134939281*np.acos(s))*np.acos(s) + (s**(1/4) - 5.37626849772727*np.sqrt(s))*(-np.sqrt(s) + np.tanh(s) + 0.8136544598469) - (s - 1.58566583235028)*(0.107435852640322*(np.sech(np.cos(128*s) - 0.358448842631776)) - 3.90785816663845) + (s + 0.086769802006066)*((np.sech((np.sech(np.cos(129.010537305414*s - 44.3458325815834*np.sin(s)))))) + 0.843647871210535)*np.acos(s) + (0.877710225772381*s**2 + np.tanh(np.acos(s) - 1.31418022982521))*(np.tanh(np.sin(0.847809657109422*s)) - np.asin(s) - 0.00389680302481388)*np.sin(19.987960824369*s*(s + 12)) + 0.287200274795928*(np.sqrt(s) + s - 2.65088602002925*np.tanh(s) - 0.0128019120024451)*np.cos(239.145007345481*s - 238.499640703128) + 2.11073891843981*(np.sqrt(1 - np.sin(5.46069308055838*s)**2) + (0.165351591788285*s + 0.713577773715253)*(16.8674987122698*np.sin(5.38484588599688*s) - 5.52304979789996*np.sin(9.81799848956101*s) - 13.6302248655058*np.sin(13.4000533974842*s) + np.cos(33*s)) - 0.125243550196568*np.sin(26.7019167669519*np.acos(s)) - 0.303589895006747*np.cos(92.475900215986*np.cos(s)))*np.cos(0.50830318137884*np.cos(3.13656065983025*s)) - 2*np.sqrt(np.sin(s)) - 0.014405562834264*np.sin(13.6335288735705*(6.5034819269012 - s)*(s - np.sin(s) - 2.00441786813565)*np.asin(s)) - np.sin(s - np.cos(s)) + 0.00368191851082523*np.sin(102.511237996397*np.tanh(s) - 0.438012456017796)*np.acos(s) + np.sin(np.sqrt(np.tanh(np.acos((np.sech(np.cos(s) - np.acos(s))))))) - 0.0145423883957665*np.cos(171.466437360444*s - 124.025106721199*np.acos(s) + 122.152134206309) - 0.0346506431242196*np.tanh(np.tanh(np.sin((22.4486431103211 - 53.9440436375348*np.acos(s))*(s + 2.34057990591909)))) - 1.92583841903471*np.tanh(np.asin(np.acos(np.sin(np.acos(s) + 0.88061075992745)))**(1/4)) + np.acos(np.sqrt(s)) - 2.11073891843981*np.asin((np.sech(np.sin(np.cos(14.7416061068815*s))))) - 0.958226850845914, \
             
-            910.397317819505*s**2 + 0.355330165110705*((sp.acos(s)*(sp.sech(s)) + sp.acos(sp.tanh(s)) + 3.02052189717171)*(-8.06209745240495*s - 8.06209745240495*(s - 1.76526657923207)*(-s*sp.acos(1 - s) - 7.32786994577697*s + (1 - sp.sin(9.52745260649217*s))*(sp.sqrt(s) + 0.569033081357664) + 7.32786994577697) + (2*s + 0.847224315881034)*(-0.0331733245671742*s**2*(sp.acos(s) + (sp.sech(4*sp.acos(s)))) + (sp.asin(s) + 8.02717924157108)*(s*(-s + 0.824794095799995*(s + sp.sin(s) - 1.07057167616488)*sp.tanh(sp.sin(4*s)) + sp.cos(14.5579093090901*sp.sqrt(s)) - 3.99121439586813) + s + 2.2595600290351*sp.acos(sp.sqrt(s)) - sp.asin(sp.asin(sp.acos(sp.sin(s + 0.997740579897724)))) + 7.19491859989258) - 1.42399599539773*sp.acos(-sp.cos(2.56125877445667*s + 6)) + sp.asin(s) - 84.8095886320156*(sp.sech(s))) + 9.26436376914449*sp.tanh(4*s - 1) - sp.acos((sp.sech(sp.cos(sp.acos(s) + 0.763930835152107)))) - 63.1365725453122*(sp.sech(9.50340250750819*s + 0.592055266079335)) - 44.91230287412) + 2*(sp.sech(sp.sin(sp.cos(7.99731719895627*s + 7.9963996081606)))))*(sp.asin((sp.sech(sp.tanh(sp.acos(s) - 0.965839717323411)))) + 4) if fitPlotFunc else lambda s: 910.397317819505*s**2 + 0.355330165110705*((np.acos(s)*(np.sech(s)) + np.acos(np.tanh(s)) + 3.02052189717171)*(-8.06209745240495*s - 8.06209745240495*(s - 1.76526657923207)*(-s*np.acos(1 - s) - 7.32786994577697*s + (1 - np.sin(9.52745260649217*s))*(np.sqrt(s) + 0.569033081357664) + 7.32786994577697) + (2*s + 0.847224315881034)*(-0.0331733245671742*s**2*(np.acos(s) + (np.sech(4*np.acos(s)))) + (np.asin(s) + 8.02717924157108)*(s*(-s + 0.824794095799995*(s + np.sin(s) - 1.07057167616488)*np.tanh(np.sin(4*s)) + np.cos(14.5579093090901*np.sqrt(s)) - 3.99121439586813) + s + 2.2595600290351*np.acos(np.sqrt(s)) - np.asin(np.asin(np.acos(np.sin(s + 0.997740579897724)))) + 7.19491859989258) - 1.42399599539773*np.acos(-np.cos(2.56125877445667*s + 6)) + np.asin(s) - 84.8095886320156*(np.sech(s))) + 9.26436376914449*np.tanh(4*s - 1) - np.acos((np.sech(np.cos(np.acos(s) + 0.763930835152107)))) - 63.1365725453122*(np.sech(9.50340250750819*s + 0.592055266079335)) - 44.91230287412) + 2*(np.sech(np.sin(np.cos(7.99731719895627*s + 7.9963996081606)))))*(np.asin((np.sech(np.tanh(np.acos(s) - 0.965839717323411)))) + 4) \
-            ][1]
+            910.397317819505*s**2 + 0.355330165110705*((sp.acos(s)*(sp.sech(s)) + sp.acos(sp.tanh(s)) + 3.02052189717171)*(-8.06209745240495*s - 8.06209745240495*(s - 1.76526657923207)*(-s*sp.acos(1 - s) - 7.32786994577697*s + (1 - sp.sin(9.52745260649217*s))*(sp.sqrt(s) + 0.569033081357664) + 7.32786994577697) + (2*s + 0.847224315881034)*(-0.0331733245671742*s**2*(sp.acos(s) + (sp.sech(4*sp.acos(s)))) + (sp.asin(s) + 8.02717924157108)*(s*(-s + 0.824794095799995*(s + sp.sin(s) - 1.07057167616488)*sp.tanh(sp.sin(4*s)) + sp.cos(14.5579093090901*sp.sqrt(s)) - 3.99121439586813) + s + 2.2595600290351*sp.acos(sp.sqrt(s)) - sp.asin(sp.asin(sp.acos(sp.sin(s + 0.997740579897724)))) + 7.19491859989258) - 1.42399599539773*sp.acos(-sp.cos(2.56125877445667*s + 6)) + sp.asin(s) - 84.8095886320156*(sp.sech(s))) + 9.26436376914449*sp.tanh(4*s - 1) - sp.acos((sp.sech(sp.cos(sp.acos(s) + 0.763930835152107)))) - 63.1365725453122*(sp.sech(9.50340250750819*s + 0.592055266079335)) - 44.91230287412) + 2*(sp.sech(sp.sin(sp.cos(7.99731719895627*s + 7.9963996081606)))))*(sp.asin((sp.sech(sp.tanh(sp.acos(s) - 0.965839717323411)))) + 4) if fitPlotFunc else lambda s: 910.397317819505*s**2 + 0.355330165110705*((np.acos(s)*(np.sech(s)) + np.acos(np.tanh(s)) + 3.02052189717171)*(-8.06209745240495*s - 8.06209745240495*(s - 1.76526657923207)*(-s*np.acos(1 - s) - 7.32786994577697*s + (1 - np.sin(9.52745260649217*s))*(np.sqrt(s) + 0.569033081357664) + 7.32786994577697) + (2*s + 0.847224315881034)*(-0.0331733245671742*s**2*(np.acos(s) + (np.sech(4*np.acos(s)))) + (np.asin(s) + 8.02717924157108)*(s*(-s + 0.824794095799995*(s + np.sin(s) - 1.07057167616488)*np.tanh(np.sin(4*s)) + np.cos(14.5579093090901*np.sqrt(s)) - 3.99121439586813) + s + 2.2595600290351*np.acos(np.sqrt(s)) - np.asin(np.asin(np.acos(np.sin(s + 0.997740579897724)))) + 7.19491859989258) - 1.42399599539773*np.acos(-np.cos(2.56125877445667*s + 6)) + np.asin(s) - 84.8095886320156*(np.sech(s))) + 9.26436376914449*np.tanh(4*s - 1) - np.acos((np.sech(np.cos(np.acos(s) + 0.763930835152107)))) - 63.1365725453122*(np.sech(9.50340250750819*s + 0.592055266079335)) - 44.91230287412) + 2*(np.sech(np.sin(np.cos(7.99731719895627*s + 7.9963996081606)))))*(np.asin((np.sech(np.tanh(np.acos(s) - 0.965839717323411)))) + 4), \
+            
+             (-s - sp.sin(sp.sin(sp.sin(s - 0.648054273663885))))*(-19.7392088021787*(2.67571068883142*s*(2*s - sp.tanh(4*s))*(s - sp.cos(16.8680906453692*s) + 2) - 758.407300902863*sp.sqrt(1 - sp.cos(s)**2) - 32*(-s - 9.3890227466338)*(-sp.sin(4*sp.cos(s)) + (sp.sech(s))) + 32*(sp.asin(s) + 2)*(s*(1.28131006800613*s*(s + 0.309227854202027)*sp.acos(s) + 15.3022365556699) + s + (sp.sech(s)) - 11.2406787953512) - sp.tanh(8*s) + 96.4229306659286)*sp.acos((sp.sech(sp.cos(s + 0.835734694797944)))) - 490.936069014555*sp.acos(s) + 286.935365941171) + 66.1732418073996 if fitPlotFunc else lambda s: (-s - np.sin(np.sin(np.sin(s - 0.648054273663885))))*(-19.7392088021787*(2.67571068883142*s*(2*s - np.tanh(4*s))*(s - np.cos(16.8680906453692*s) + 2) - 758.407300902863*np.sqrt(1 - np.cos(s)**2) - 32*(-s - 9.3890227466338)*(-np.sin(4*np.cos(s)) + (np.sech(s))) + 32*(np.asin(s) + 2)*(s*(1.28131006800613*s*(s + 0.309227854202027)*np.acos(s) + 15.3022365556699) + s + (np.sech(s)) - 11.2406787953512) - np.tanh(8*s) + 96.4229306659286)*np.acos((np.sech(np.cos(s + 0.835734694797944)))) - 490.936069014555*np.acos(s) + 286.935365941171) + 66.1732418073996, \
+             
+             (16.8628538825269*s + 4.92392005967279)*(4*s*(4.00068945874879*s*(s + 0.28549567287002)*(0.470849636959574*s*sp.tanh(sp.sin(4*s)) - 0.348173019610597*sp.sqrt(1 - s**2) + 5.98260963803135) - 18.7744643628014*s*sp.asin(sp.asin(sp.tanh(s))) - 7.18481889569721*sp.sqrt(sp.sqrt(s) + sp.asin(s)) + 1.88321968697531) + 4*(s - 0.840965153292331)*(0.0648021383180489*sp.sqrt(s) - 0.180466045862777*sp.sin(9.55978346043853*s) - 1.46188451980821) - sp.tanh(sp.asin((sp.sech(13.4152891392837*s))))) + 0.0318179417512754*sp.sin(50.9400726856814*s) - 0.0103716121867474*sp.sin(58.3336431009448*s) + 0.0240970351293036*sp.sin(s*(sp.acos(s) - 44.2002283237726)) + 11.6126258045021*sp.sin(sp.cos(7.99942349483886*s + 2.25158105089471)) - 0.0281495062038148*sp.cos(36.8207704026717*s) - 0.0188513554779529*sp.cos(66.7337749199128*s) - 38.1718134324209*sp.asin(sp.cos(sp.acos(s) - 1.01468675350425)) + 25.2644339188583 if fitPlotFunc else lambda s: (16.8628538825269*s + 4.92392005967279)*(4*s*(4.00068945874879*s*(s + 0.28549567287002)*(0.470849636959574*s*np.tanh(np.sin(4*s)) - 0.348173019610597*np.sqrt(1 - s**2) + 5.98260963803135) - 18.7744643628014*s*np.asin(np.asin(np.tanh(s))) - 7.18481889569721*np.sqrt(np.sqrt(s) + np.asin(s)) + 1.88321968697531) + 4*(s - 0.840965153292331)*(0.0648021383180489*np.sqrt(s) - 0.180466045862777*np.sin(9.55978346043853*s) - 1.46188451980821) - np.tanh(np.asin((np.sech(13.4152891392837*s))))) + 0.0318179417512754*np.sin(50.9400726856814*s) - 0.0103716121867474*np.sin(58.3336431009448*s) + 0.0240970351293036*np.sin(s*(np.acos(s) - 44.2002283237726)) + 11.6126258045021*np.sin(np.cos(7.99942349483886*s + 2.25158105089471)) - 0.0281495062038148*np.cos(36.8207704026717*s) - 0.0188513554779529*np.cos(66.7337749199128*s) - 38.1718134324209*np.asin(np.cos(np.acos(s) - 1.01468675350425)) + 25.2644339188583, \
+             
+             sp.sqrt(1 - s**2) + 47.9715483675105*(1.00025526981474 - sp.sqrt(s))*(1.03451633118392 - s)*(-15.5229669626374*sp.sqrt(s) + (22.0639640559243*s - 0.169387092310089)*(-(s - sp.cos(sp.cos(s) - 0.323881403841572))*(sp.acos(s**(1/4)) + 0.37488884525338)*(13.4375388430525*s*(s + 1.88644205199395) + sp.acos(sp.sin(4.00058140697061*s)) + 12.4532239452825) - (3.99997814050942*s - 4.00042312548349)*(0.194293985081638*(s - 0.684729847969017)*sp.sin(10.6714953470386*s) - 5.7277425024394) - 5.04238584837244)*sp.asin(sp.tanh(sp.acos(s))) - 0.152758686104296*sp.sin(28.5515909125915*s) + 82.7178074430341*sp.tanh(4*s) - 3.70717739766979) - 0.311005420129647*(s - sp.sin(16*s - 78.1047952958641*sp.acos(s)))*(-sp.sqrt(s)*sp.tanh(s) + 0.771784354046868*s) - 0.0164279532978721*sp.sin(96.2372260055256*s) - 9.5707963267949*sp.sin(0.0134503159471515*sp.cos(69.4244845389588*s)) - sp.cos(s) - 0.108707226029775*sp.cos(s*(-4.62874098003905*s - 61.7360914152094)) - 0.227765809456258*sp.acos(s)**(1/8) - 0.0643068504087358*sp.acos(s)*(sp.sech(sp.asin(sp.cos(31.7263709278345*s + 31.6529450995372*sp.asin(s) - 1.23965777868236)))) + sp.acos(sp.cos(4.12586583940654*s)) + 431.174465535082*sp.acos((sp.sech(sp.cos(s) - 0.718407394966649))) - 31.1395561959846*sp.asin(sp.cos(sp.sqrt(s) - 0.410731201559706)) + (sp.sech(4104.2069390434*sp.tanh(s - 0.771043790235854) + 7.33665770771229)) + 30.4805027303549*(sp.sech(11.8329408488912*sp.sin(s))) + 7.00977286907249*(sp.sech(sp.asin(s))) - 0.417323183040896 if fitPlotFunc else lambda s: np.sqrt(1 - s**2) + 47.9715483675105*(1.00025526981474 - np.sqrt(s))*(1.03451633118392 - s)*(-15.5229669626374*np.sqrt(s) + (22.0639640559243*s - 0.169387092310089)*(-(s - np.cos(np.cos(s) - 0.323881403841572))*(np.acos(s**(1/4)) + 0.37488884525338)*(13.4375388430525*s*(s + 1.88644205199395) + np.acos(np.sin(4.00058140697061*s)) + 12.4532239452825) - (3.99997814050942*s - 4.00042312548349)*(0.194293985081638*(s - 0.684729847969017)*np.sin(10.6714953470386*s) - 5.7277425024394) - 5.04238584837244)*np.asin(np.tanh(np.acos(s))) - 0.152758686104296*np.sin(28.5515909125915*s) + 82.7178074430341*np.tanh(4*s) - 3.70717739766979) - 0.311005420129647*(s - np.sin(16*s - 78.1047952958641*np.acos(s)))*(-np.sqrt(s)*np.tanh(s) + 0.771784354046868*s) - 0.0164279532978721*np.sin(96.2372260055256*s) - 9.5707963267949*np.sin(0.0134503159471515*np.cos(69.4244845389588*s)) - np.cos(s) - 0.108707226029775*np.cos(s*(-4.62874098003905*s - 61.7360914152094)) - 0.227765809456258*np.acos(s)**(1/8) - 0.0643068504087358*np.acos(s)*(np.sech(np.asin(np.cos(31.7263709278345*s + 31.6529450995372*np.asin(s) - 1.23965777868236)))) + np.acos(np.cos(4.12586583940654*s)) + 431.174465535082*np.acos((np.sech(np.cos(s) - 0.718407394966649))) - 31.1395561959846*np.asin(np.cos(np.sqrt(s) - 0.410731201559706)) + (np.sech(4104.2069390434*np.tanh(s - 0.771043790235854) + 7.33665770771229)) + 30.4805027303549*(np.sech(11.8329408488912*np.sin(s))) + 7.00977286907249*(np.sech(np.asin(s))) - 0.417323183040896,
+             
+             (0.0287358167626022 - 0.00712394661940723*s)*sp.tanh(64*s - 64*sp.sin(168.788368820536*s)) - 0.213283773336478*(0.697318395352923 - s)*sp.cos((85.8913821666882 - 16.3346712245428*s)*(s - 2) - 12.2825376750029) + (17.1337427615634*s + 30.4722046456462)*(4*s*(6.4061897227356*s*(s - 0.0569033914506833)*(0.467039135442353*s*sp.tanh(sp.sin(4*s)) - 0.253690954471268*sp.sqrt(1 - s**2) + 4.13512783244562) - 16.2118377674452*s*sp.asin(sp.acos((sp.sech(s)))) - 5.62171429550206*sp.sqrt(s + sp.asin(s)) + 3.18645625685968) - (2.6622414162121*s - 1)*(sp.sqrt(s)*(s - 0.128982654313321) + 0.12888067967297*sp.sin(10.6415385122204*s) + 0.506301933651683) - sp.tanh(sp.asin((sp.sech(17.1500695201152*s))))) - 1.44560779884151*sp.sin(51.0727674445071*s) + 1.3466702772686*sp.sin(51.4695471152235*s) + 0.534074778210937*sp.sin(s*(sp.acos(s) - 46.6177357352168)) - 24.4816144663704*sp.sin(sp.cos(7.16097575179141*s - 0.449304692850924)) + 0.459303428337985*sp.cos(39.2597406877472*s) + 0.192539015198248*sp.cos(63.3624466252343*s) + 37.4807272000627*sp.acos(sp.cos(sp.acos(s) - 0.660797947851642)) if fitPlotFunc else lambda s: (0.0287358167626022 - 0.00712394661940723*s)*np.tanh(64*s - 64*np.sin(168.788368820536*s)) - 0.213283773336478*(0.697318395352923 - s)*np.cos((85.8913821666882 - 16.3346712245428*s)*(s - 2) - 12.2825376750029) + (17.1337427615634*s + 30.4722046456462)*(4*s*(6.4061897227356*s*(s - 0.0569033914506833)*(0.467039135442353*s*np.tanh(np.sin(4*s)) - 0.253690954471268*np.sqrt(1 - s**2) + 4.13512783244562) - 16.2118377674452*s*np.asin(np.acos((np.sech(s)))) - 5.62171429550206*np.sqrt(s + np.asin(s)) + 3.18645625685968) - (2.6622414162121*s - 1)*(np.sqrt(s)*(s - 0.128982654313321) + 0.12888067967297*np.sin(10.6415385122204*s) + 0.506301933651683) - np.tanh(np.asin((np.sech(17.1500695201152*s))))) - 1.44560779884151*np.sin(51.0727674445071*s) + 1.3466702772686*np.sin(51.4695471152235*s) + 0.534074778210937*np.sin(s*(np.acos(s) - 46.6177357352168)) - 24.4816144663704*np.sin(np.cos(7.16097575179141*s - 0.449304692850924)) + 0.459303428337985*np.cos(39.2597406877472*s) + 0.192539015198248*np.cos(63.3624466252343*s) + 37.4807272000627*np.acos(np.cos(np.acos(s) - 0.660797947851642))
+            ][3]
 
-        plot_func_eqn = r"$z(s)$".replace("x_{0}","s")
+        plot_func_eqn = (r"$"+track_coord.lower()+r"(s)$").replace("x_{0}","s")
 #        plot_func = None
 #        plot_func_eqn = None
-        print(*zip(S[track_number-1][:], Z[track_number-1][:]), sep = '\n')
+        print(*zip(S[track_number-1][:], track_dict[track_coord][track_number-1][:]), sep = '\n')
         print(f"number of data points = {len(S[track_number-1][:])}")
 #        N_dat = 10000
         x_dat = S[track_number-1];# x_min = min(S[track_number-1]); x_max = max(S[track_number-1]);
 #        x_dat = np.linspace(x_min, x_max, N_dat)
-        y_dat = Z[track_number-1];# y_min = min(Z[track_number-1]); y_max = max(Z[track_number-1]);
+        y_dat = track_dict[track_coord][track_number-1];# y_min = min(track_dict[track_coord][track_number-1]); y_max = max(track_dict[track_coord][track_number-1]);
 #        y_dat = np.linspace(y_min, y_max, N_dat)
-        sigma_dat = SIG_Z_LIST[track_number-1];# sigma_min = min(SIG_Z_LIST[track_number-1]); sigma_max = max(SIG_Z_LIST[track_number-1]);
+        sigma_dat = track_sig_dict[track_coord][track_number-1];# sigma_min = min(SIG_Z_LIST[track_number-1]); sigma_max = max(SIG_Z_LIST[track_number-1]);
 #        sigma_dat = np.linspace(sigma_min, sigma_max, N_dat)
         
-        create_stubborn_track_dataset(x_dat, y_dat, file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-200, 75), sigma = sigma_dat, legend_size = 6, add_seed_params = add_seed_params)
+        create_stubborn_track_dataset(x_dat, y_dat, file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-50, 200), sigma = sigma_dat, legend_size = 6, add_seed_params = add_seed_params)
 
     model_kwargs = dict(
         niterations=100,
@@ -1303,13 +1385,13 @@ if __name__ == '__main__':
                     )
                 if is_weighted():
                     print(
-                        f"[Track {track_idx} {coord_name}] RunPySR=False; using best available template "
+                        f"[Track {track_idx} {coord_name}] RunPySR=False; using best available template [{best_template_index}] "
                         f"(chi2_red={best_metrics['chi2_red']:.3f}, target 1)."
                     )
                 else:
                     print(
                         f"[Track {track_idx} {coord_name}] best_R2={best_metrics['R2']:.3f} < {R2_THRESHOLD} "
-                        f"but RunPySR=False; using best available template."
+                        f"but RunPySR=False; using best available template [{best_template_index}]. "
                     )
                 eqn_list.append(best_expr)
                 families_list.append(best_template_index)

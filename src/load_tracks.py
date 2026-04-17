@@ -27,6 +27,17 @@ def load_single_track(csv_path, param="arc"):
     s = None
     if param == "index":
         s = np.arange(len(x), dtype=float) # <-- hit index parameterization
+    elif param == "phi":
+        s = np.unwrap(phi.astype(float))
+        s = s - s[0]
+
+        # If numerical noise or ordering makes phi decrease overall,
+        # flip sign so s increases along the track.
+        if len(s) > 1 and s[-1] < 0:
+            s = -s
+
+        if len(s) > 1 and s[-1] > 0:
+            s = s / s[-1]
     else:
         s = compute_arc_length(x, y, z)
         if s[-1] > 0:
@@ -43,7 +54,7 @@ def load_single_track(csv_path, param="arc"):
 
     return s, x, y, z, sig_x, sig_y, sig_z
 
-def load_many_tracks(folder_path, max_tracks=None, min_hits=6):
+def load_many_tracks(folder_path, max_tracks=None, min_hits=6, param = "arc"):
     files = sorted(glob.glob(os.path.join(folder_path, "*-hits.csv")))
     print(f"Found {len(files)} tracks.")
 
@@ -55,7 +66,7 @@ def load_many_tracks(folder_path, max_tracks=None, min_hits=6):
         print(f"Loading file {f}")
         try:
             # load_single_track returns (s, x, y, z, sig_x, sig_y, sig_z, meta)
-            s, x, y, z, sig_x, sig_y, sig_z = load_single_track(f, param="arc")
+            s, x, y, z, sig_x, sig_y, sig_z = load_single_track(f, param=param)
 
             if len(s) < min_hits:
                 continue  # too short → useless for SR

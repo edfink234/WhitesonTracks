@@ -227,7 +227,7 @@ def make_tracks_from_fourier_balls(chunk_size, fourierDim, radii, min_radii, cen
 #    print(all([hyper_fourier_points[0].shape == i.shape for i in hyper_fourier_points]))
 
 #    print(hyper_fourier_points.shape)
-    print(f"hyper_fourier_points = {hyper_fourier_points}")
+#    print(f"hyper_fourier_points = {hyper_fourier_points}")
 #    exit()
     return np.array(hyper_fourier_points)
 
@@ -239,6 +239,44 @@ def fourierExpand(fourierDim, Lambda, t, chunk_size = chunk_size):
         fourList.append(np.cos(2 * np.pi * f_dimension * t[:,np.newaxis, np.newaxis]/Lambda - shift[:,f_dimension,:,:]))
     fourList = np.array(fourList)
     return (fourList, shift)
+
+# add near the other helpers, e.g. after fourierExpand(...)
+def build_track_latex(STANDARD_MODEL, fourierDim=None, Lambda=None):
+    if STANDARD_MODEL:
+        return {
+            "model_type": "STANDARD_MODEL",
+            "latex_x": r"x(t) = x_c + R_{\mathrm{cm}}\cos\!\left(\phi_0 + q\,\phi_{\mathrm{scale}}\,t\right)",
+            "latex_y": r"y(t) = y_c + R_{\mathrm{cm}}\sin\!\left(\phi_0 + q\,\phi_{\mathrm{scale}}\,t\right)",
+            "latex_z": r"z(t) = z_0 + \left(\frac{p_z}{p_T}\right) R_{\mathrm{cm}}\left[\phi(t)-\phi_0\right]",
+            "latex_phi": r"\phi(t)=\phi_0 + q\,\phi_{\mathrm{scale}}\,t",
+            "latex_r": r"r(t)=\sqrt{x(t)^2+y(t)^2}"
+        }
+    else:
+        terms_x = [
+            rf"a_{{{n},x}}\cos\!\left(\frac{{2\pi  ({n}) t}}{{\Lambda}}-\delta_{{{n},x}}\right)"
+            for n in range(fourierDim)
+        ]
+        terms_y = [
+            rf"a_{{{n},y}}\cos\!\left(\frac{{2\pi ({n}) t}}{{\Lambda}}-\delta_{{{n},y}}\right)"
+            for n in range(fourierDim)
+        ]
+        terms_z = [
+            rf"a_{{{n},z}}\cos\!\left(\frac{{2\pi ({n}) t}}{{\Lambda}}-\delta_{{{n},z}}\right)"
+            for n in range(fourierDim)
+        ]
+
+        latex_x = r"x(t)=" + " + ".join(terms_x) + r" + x_{\mathrm{shift}}"
+        latex_y = r"y(t)=" + " + ".join(terms_y) + r" + y_{\mathrm{shift}}"
+        latex_z = r"z(t)=" + " + ".join(terms_z) + r" + z_{\mathrm{shift}}"
+
+        return {
+            "model_type": "FOURIER",
+            "latex_x": latex_x,
+            "latex_y": latex_y,
+            "latex_z": latex_z,
+            "latex_r": r"r(t)=\sqrt{x(t)^2+y(t)^2}",
+            "latex_phi": r"\phi(t)=\operatorname{atan2}(y(t),x(t))"
+        }
 
 def _count_layer_crossings_for_track(r_samples, z_samples, layer_radii_cm, z_limit_cm, tol_cm=0.5):
     """
@@ -471,23 +509,23 @@ def tracks_cylindrical_fourier_balls(t,fourierDim, Lambda, chunk_size, radii, mi
 
     # # Stop tracking memory allocations
     # tracemalloc.stop()
-    print(f"r = {r}")
-    print(f"phi = {phi}")
-    print(f"z = {z}")
-    print(f"r.shape = {r.shape}")
-    print(f"phi.shape = {phi.shape}")
-    print(f"z.shape = {z.shape}")
+#    print(f"r = {r}")
+#    print(f"phi = {phi}")
+#    print(f"z = {z}")
+#    print(f"r.shape = {r.shape}")
+#    print(f"phi.shape = {phi.shape}")
+#    print(f"z.shape = {z.shape}")
     
     r_0 = r[:, 0]
     phi_0 = phi[:, 0]
     z_0 = z[:, 0]
     
-    print(f"r[:, 0] = {r[:, 0]}")
-    print(f"phi[:, 0] = {phi[:, 0]}")
-    print(f"z[:, 0] = {z[:, 0]}")
-    print(f"r[:, 0].shape = {r[:, 0].shape}")
-    print(f"phi[:, 0].shape = {phi[:, 0].shape}")
-    print(f"z[:, 0].shape = {z[:, 0].shape}")
+#    print(f"r[:, 0] = {r[:, 0]}")
+#    print(f"phi[:, 0] = {phi[:, 0]}")
+#    print(f"z[:, 0] = {z[:, 0]}")
+#    print(f"r[:, 0].shape = {r[:, 0].shape}")
+#    print(f"phi[:, 0].shape = {phi[:, 0].shape}")
+#    print(f"z[:, 0].shape = {z[:, 0].shape}")
     
 #    plt.plot(r_0, z_0)
 #    plt.show()
@@ -782,7 +820,9 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
 
     # Write manifest once
     manifest_path = os.path.join(dataset_dir, "manifest.json")
+    
     if not os.path.exists(manifest_path):
+        latex_info = build_track_latex(STANDARD_MODEL=STANDARD_MODEL, fourierDim=fourierDim, Lambda=Lambda)
         manifest = {
             "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "NUM_TRAIN_TRACKS": train_size,
@@ -791,7 +831,7 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
             "DETECTOR_LENGTH": detector_length,
             "SMALLEST_LAYER": smallest_layer,
             "LARGEST_LAYER": largest_layer,
-            "FOURIER_DIM_TRAIN": fourierDimTrain - 1,  # because script adds 1 later
+            "FOURIER_DIM_TRAIN": fourierDimTrain - 1,
             "FOURIER_DIM_TEST": fourierDimTest - 1,
             "TRAIN_FUNCTION": schwartz_train_function,
             "TEST_FUNCTION": schwartz_test_function,
@@ -800,6 +840,8 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
             "HIT_NOISE_SIGMA_XY": HIT_NOISE_SIGMA_XY,
             "HIT_NOISE_SIGMA_Z": HIT_NOISE_SIGMA_Z,
             "WRITE_HIT_SIGMAS": WRITE_HIT_SIGMAS,
+            "STANDARD_MODEL": STANDARD_MODEL,
+            "track_latex": latex_info,
         }
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
@@ -864,5 +906,6 @@ if __name__ == '__main__':
     print("making test set")
     make_files(datatype = 'test', signal_tracks_per_event = signal_tracks_per_event,fourierRadii = fourierRadiiTest,fourierDim = fourierDimTest,
               times = times, fourierCenters = fourierCenters, min_radii=min_test_radii, Lambda = Lambda, min_dist_to_detector_layer = min_dist_to_detector_layer, data_combination ='signal')
+
 
 
