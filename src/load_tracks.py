@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import glob
 import os
+from scipy.optimize import least_squares
 
 def cylindrical_to_cartesian(r, phi, z):
     x = r * np.cos(phi)
@@ -28,16 +29,24 @@ def load_single_track(csv_path, param="arc"):
     if param == "index":
         s = np.arange(len(x), dtype=float) # <-- hit index parameterization
     elif param == "phi":
-        s = np.unwrap(phi.astype(float))
+        # Reconstruct the intrinsic helix phase about the fitted circle center,
+        # not the stored CSV phi = atan2(y, x) about the origin.
+        xc0, yc0 = np.mean(x), np.mean(y)
+        R0 = np.median(np.sqrt((x - xc0)**2 + (y - yc0)**2))
+
+        def circle_resid(p):
+            xc, yc, R = p
+            return np.sqrt((x - xc)**2 + (y - yc)**2) - R
+
+        res_xy = least_squares(circle_resid, [xc0, yc0, R0], loss="soft_l1", f_scale=1.0)
+        xc_fit, yc_fit, R_fit = res_xy.x
+
+        s = np.unwrap(np.arctan2(y - yc_fit, x - xc_fit)).astype(float)
         s = s - s[0]
 
-        # If numerical noise or ordering makes phi decrease overall,
-        # flip sign so s increases along the track.
+        # Keep orientation consistent along the track
         if len(s) > 1 and s[-1] < 0:
             s = -s
-
-        if len(s) > 1 and s[-1] > 0:
-            s = s / s[-1]
     else:
         s = compute_arc_length(x, y, z)
         if s[-1] > 0:
@@ -55,6 +64,7 @@ def load_single_track(csv_path, param="arc"):
     return s, x, y, z, sig_x, sig_y, sig_z
 
 def load_many_tracks(folder_path, max_tracks=None, min_hits=6, param = "arc"):
+    print(f"folder_path = {folder_path}")
     files = sorted(glob.glob(os.path.join(folder_path, "*-hits.csv")))
     print(f"Found {len(files)} tracks.")
 

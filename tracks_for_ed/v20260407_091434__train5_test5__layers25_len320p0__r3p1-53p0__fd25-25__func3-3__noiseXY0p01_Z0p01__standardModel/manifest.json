@@ -1,0 +1,27 @@
+{
+  "created_utc": "2026-04-07T16:14:34Z",
+  "NUM_TRAIN_TRACKS": 5,
+  "NUM_TEST_TRACKS": 5,
+  "NUMBER_OF_LAYERS": 25,
+  "DETECTOR_LENGTH": 320.0,
+  "SMALLEST_LAYER": 3.1,
+  "LARGEST_LAYER": 53.0,
+  "FOURIER_DIM_TRAIN": 25,
+  "FOURIER_DIM_TEST": 25,
+  "TRAIN_FUNCTION": 3,
+  "TEST_FUNCTION": 3,
+  "DISJOINT": false,
+  "ADD_HIT_NOISE": true,
+  "HIT_NOISE_SIGMA_XY": 0.01,
+  "HIT_NOISE_SIGMA_Z": 0.01,
+  "WRITE_HIT_SIGMAS": true,
+  "STANDARD_MODEL": true,
+  "track_latex": {
+    "model_type": "STANDARD_MODEL",
+    "latex_x": "x(t) = x_c + R_{\\mathrm{cm}}\\cos\\!\\left(\\phi_0 + q\\,\\phi_{\\mathrm{scale}}\\,t\\right)",
+    "latex_y": "y(t) = y_c + R_{\\mathrm{cm}}\\sin\\!\\left(\\phi_0 + q\\,\\phi_{\\mathrm{scale}}\\,t\\right)",
+    "latex_z": "z(t) = z_0 + \\left(\\frac{p_z}{p_T}\\right) R_{\\mathrm{cm}}\\left[\\phi(t)-\\phi_0\\right]",
+    "latex_phi": "\\phi(t)=\\phi_0 + q\\,\\phi_{\\mathrm{scale}}\\,t",
+    "latex_r": "r(t)=\\sqrt{x(t)^2+y(t)^2}"
+  }
+}

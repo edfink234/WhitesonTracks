@@ -480,6 +480,29 @@ def template_with_seed_params(template):
     if "seed_params" in t and t["seed_params"] is not None:
         t["init_params"] = np.asarray(t["seed_params"], dtype=float)
     return t
+
+def sync_template_sets(x_templates, y_templates, z_templates):
+    """
+    Merge x/y/z template libraries into one unique list (by template_signature),
+    then assign that same merged list back to x, y, z.
+    """
+    merged = []
+    seen = set()
+
+    for t in x_templates + y_templates + z_templates:
+        t_use = template_with_seed_params(t)
+        sig = template_signature(t_use)
+        if sig not in seen:
+            seen.add(sig)
+            merged.append(t_use)
+
+    print(
+        f"[sync] x={len(x_templates)}, y={len(y_templates)}, z={len(z_templates)} "
+        f"-> merged unique={len(merged)}"
+    )
+
+    # separate list objects, same template contents
+    return list(merged), list(merged), list(merged)
     
 def sanitize_prediction(y_pred, *, imag_tol=1e-8, return_mask=False):
     """
@@ -705,13 +728,15 @@ def summarize_families(coord_name, templates, families, r2_list):
 
     return latex_table, latex_eqns
 
-def summarize_3d_families(families_x, families_y, families_z, r2_x_all, r2_y_all, r2_z_all):
+def summarize_3d_families(families_x, families_y, families_z, r2_x_all, r2_y_all, r2_z_all, chi2_x_all, chi2_y_all, chi2_z_all, weighted=False):
     """
     Group tracks by 3D family triples (Fx, Fy, Fz),
     print text summary, and return LaTeX table string.
     """
-    assert len(families_x) == len(families_y) == len(families_z) == len(r2_x_all) == len(r2_y_all) == len(r2_z_all), \
-        "All family and R^2 arrays must have the same length."
+    assert len(families_x) == len(families_y) == len(families_z) == \
+           len(r2_x_all) == len(r2_y_all) == len(r2_z_all) == \
+           len(chi2_x_all) == len(chi2_y_all) == len(chi2_z_all), \
+           "All family and metric arrays must have the same length."
 
     n_tracks = len(families_x)
 
@@ -721,7 +746,10 @@ def summarize_3d_families(families_x, families_y, families_z, r2_x_all, r2_y_all
         "r2x": [],
         "r2y": [],
         "r2z": [],
-        "indices": []  # track indices (optional, for debugging)
+        "chi2x": [],
+        "chi2y": [],
+        "chi2z": [],
+        "indices": []
     })
 
     for i in range(n_tracks):
@@ -730,6 +758,9 @@ def summarize_3d_families(families_x, families_y, families_z, r2_x_all, r2_y_all
         triple_stats[triple]["r2x"].append(r2_x_all[i])
         triple_stats[triple]["r2y"].append(r2_y_all[i])
         triple_stats[triple]["r2z"].append(r2_z_all[i])
+        triple_stats[triple]["chi2x"].append(chi2_x_all[i])
+        triple_stats[triple]["chi2y"].append(chi2_y_all[i])
+        triple_stats[triple]["chi2z"].append(chi2_z_all[i])
         triple_stats[triple]["indices"].append(i)
 
     # Sort triples in a deterministic way
@@ -744,23 +775,31 @@ def summarize_3d_families(families_x, families_y, families_z, r2_x_all, r2_y_all
     lines.append(r"\centering")
     lines.append(r"\begin{tabular}{c c c c c c c c}")
     lines.append(r"\hline")
-    lines.append(r"Family & $F_x$ & $F_y$ & $F_z$ & \#~Tracks & Mean $R_x^2$ & Mean $R_y^2$ & Mean $R_z^2$ \\")
+    if weighted:
+        lines.append(r"Family & $F_x$ & $F_y$ & $F_z$ & \#~Tracks & Mean $\chi^2_{\nu,x}$ & Mean $\chi^2_{\nu,y}$ & Mean $\chi^2_{\nu,z}$ \\")
+    else:
+        lines.append(r"Family & $F_x$ & $F_y$ & $F_z$ & \#~Tracks & Mean $R_x^2$ & Mean $R_y^2$ & Mean $R_z^2$ \\")
     lines.append(r"\hline")
 
     for triple in unique_triples:
         fid = triple_id_map[triple]
         data = triple_stats[triple]
-        r2x_arr = np.array(data["r2x"])
-        r2y_arr = np.array(data["r2y"])
-        r2z_arr = np.array(data["r2z"])
+        if weighted:
+            arr_x = np.array(data["chi2x"])
+            arr_y = np.array(data["chi2y"])
+            arr_z = np.array(data["chi2z"])
+        else:
+            arr_x = np.array(data["r2x"])
+            arr_y = np.array(data["r2y"])
+            arr_z = np.array(data["r2z"])
 
-        mean_r2x = r2x_arr.mean()
-        mean_r2y = r2y_arr.mean()
-        mean_r2z = r2z_arr.mean()
+        mean_x = arr_x.mean()
+        mean_y = arr_y.mean()
+        mean_z = arr_z.mean()
 
         lines.append(
             fr"{fid} & {triple[0]} & {triple[1]} & {triple[2]} & "
-            fr"{data['count']} & {mean_r2x:.3f} & {mean_r2y:.3f} & {mean_r2z:.3f} \\"
+            fr"{data['count']} & {mean_x:.3f} & {mean_y:.3f} & {mean_z:.3f} \\"
         )
 
     lines.append(r"\hline")
@@ -786,11 +825,12 @@ if __name__ == '__main__':
     OPEN_PNGS = False
     OPEN_HTML = True
     create_dataset_only = True
-    add_seed_params = True
+    add_seed_params = False
     TEMPLATE_PATH = "track_templates.pkl"
+    SYNC_TEMPLATES = False
     printTemplatesOnly = False
-    templates_to_delete = {}#{"x_templates": set(range(14,15)), "y_templates": {}, "z_templates": {}}
-    ADD_FUNC_TO_TEMPLATES = create_dataset_only and True
+    templates_to_delete = {}#{"x_templates": {23}, "y_templates": {23}, "z_templates": {23}}
+    ADD_FUNC_TO_TEMPLATES = create_dataset_only and False
     R2_THRESHOLD = 0.997
     RunPySR = False   # Whether to enable (True) or disable (False) PySR discovery
     MaxPySRIters = 100
@@ -798,7 +838,7 @@ if __name__ == '__main__':
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
     
-    track_dataset_idx = 4
+    track_dataset_idx = 3
     out_html = [
         "v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html",
         "v1_noiseless_69000.html",
@@ -814,21 +854,22 @@ if __name__ == '__main__':
         "v20260305_002410 train/test (noise XY=0.01, Z=0.01)",
         "v20260407_091434 train/test (noise XY=0.01, Z=0.01) Standard Model",
     ]
-    print(out_html, track_folder, dataset_labels, sep='\n'); exit()
+    print(out_html, track_folder, dataset_labels, sep='\n');
     track_folder = track_folder[track_dataset_idx]
     dataset_label = dataset_labels[track_dataset_idx]
     out_html = out_html[track_dataset_idx]
 
     is_standard_model_dataset = ("standardModel" in out_html)
+    
     usePhi = is_standard_model_dataset and True
     if usePhi:
-        track_folder = track_folder.replace("standardModel", "standardModel_using_Phi")
         dataset_label = dataset_label.replace("Standard Model", r"Standard Model ($s = \phi$)")
         out_html = out_html.replace("standardModel", "standardModel_using_Phi")
 
     outfile_str = out_html[:-5]
-    independent_param = "phi" if usePhi else "arc"
     
+    independent_param = "phi" if usePhi else "arc"
+    print(f"independent_param = {independent_param}")
     if os.path.exists(TEMPLATE_PATH):
         print("Loading existing template library...")
         with open(TEMPLATE_PATH, "rb") as f:
@@ -888,12 +929,29 @@ if __name__ == '__main__':
     
     print("Now, autoscanning *.pkl files for templates...")
     autoscan_seed_templates(x_templates, y_templates, z_templates)
+    if SYNC_TEMPLATES:
+        x_templates, y_templates, z_templates = sync_template_sets(
+            x_templates, y_templates, z_templates
+        )
+
+        with open(TEMPLATE_PATH, "wb") as f:
+            pickle.dump(
+                {
+                    "x_templates": x_templates,
+                    "y_templates": y_templates,
+                    "z_templates": z_templates,
+                },
+                f,
+            )
+        print(f"[sync] Saved synced template library to: {TEMPLATE_PATH}")
+        exit()
     
 #        z_templates.append(make_parametric_template(-34.520199*sp.sech(s**(-1.45342) - 3.00504026595319), s_name="s"))
     track_infos = []  # store per-track info for HTML
     x_eqns, y_eqns, z_eqns = [], [], []   # store final numeric expressions used
     families_x, families_y, families_z = [], [], []  # indices of template used
     r2_x_all, r2_y_all, r2_z_all = [], [], [] # R^2 values for each track and coordinate
+    chi2_x_all, chi2_y_all, chi2_z_all = [], [], []
 
     # now load sigma arrays too
     S, X, Y, Z, SIG_X_LIST, SIG_Y_LIST, SIG_Z_LIST, F = load_many_tracks(track_folder, max_tracks=num_tracks, param = independent_param)
@@ -902,12 +960,12 @@ if __name__ == '__main__':
 #    print(f"len(S), len(X), len(Y), len(Z), len(F) = {(len(S), len(X), len(Y), len(Z), len(F))}")
 #    print(SIG_X_LIST[0], SIG_Y_LIST[0], SIG_Z_LIST[0]); exit()
     
-    def maybe_add_fitted_func_to_templates(plot_func, s_data, y_true, sigma, coord, s_name="s"):
+    def maybe_add_fitted_func_to_templates(plot_func, s_data, y_true, sigma, coord, s_name="s", use_best_template=False):
         """
         Fit symbolic plot_func to data, and if it beats existing templates,
         add its template.
         """
-        if (not ADD_FUNC_TO_TEMPLATES) or (coord not in ("x", "y", "z")):
+        if (coord not in ("x", "y", "z")):
             return None
 
         if not hasattr(plot_func, "atoms"):
@@ -940,35 +998,56 @@ if __name__ == '__main__':
             else:
                 return a["R2"] > b["R2"]
 
+        # Find actual best old template once
         best_old = None
+        best_template = None
+        best_expr = None
+        best_pred = None
+
         for t_old in coord_templates:
             try:
-                m_old, _, _, _ = fit_template_to_data(t_old, s_data, y_true, sigma=sigma)
+                m_old, _, expr_old, y_old = fit_template_to_data(
+                    t_old, s_data, y_true, sigma=sigma
+                )
             except Exception:
                 continue
             if better(m_old, best_old):
                 best_old = m_old
+                best_template = t_old
+                best_expr = expr_old
+                best_pred = y_old
 
-        is_best = better(metrics, best_old)
+        if use_best_template:
+            return {
+                "template": best_template,
+                "metrics": best_old,
+                "p_opt": None,
+                "expr_fitted": best_expr,
+                "y_pred": best_pred,
+            }
+            
+        if ADD_FUNC_TO_TEMPLATES:
+            is_best = better(metrics, best_old)
 
-        if is_best:
-            new_sig = template_signature(template)
-            already = any(template_signature(t) == new_sig for t in coord_templates)
-            if not already:
-                coord_templates.append(template)
-                save_obj = {
-                    "x_templates": x_templates,
-                    "y_templates": y_templates,
-                    "z_templates": z_templates,
-                }
-                with open(TEMPLATE_PATH, "wb") as f:
-                    pickle.dump(save_obj, f)
+            if is_best:
+                new_sig = template_signature(template)
+                already = any(template_signature(t) == new_sig for t in coord_templates)
+                if not already:
+                    coord_templates.append(template)
+                    save_obj = {
+                        "x_templates": x_templates,
+                        "y_templates": y_templates,
+                        "z_templates": z_templates,
+                    }
+                    with open(TEMPLATE_PATH, "wb") as f:
+                        pickle.dump(save_obj, f)
 
-                print(f"[ADD_FUNC_TO_TEMPLATES] Added fitted {coord}(s) template and saved to {TEMPLATE_PATH}.")
+                    print(f"[ADD_FUNC_TO_TEMPLATES] Added fitted {coord}(s) template and saved to {TEMPLATE_PATH}.")
+                else:
+                    print(f"[ADD_FUNC_TO_TEMPLATES] Fitted {coord}(s) template already exists; not adding.")
             else:
-                print(f"[ADD_FUNC_TO_TEMPLATES] Fitted {coord}(s) template already exists; not adding.")
-        else:
-            print(f"Best template fit {best_old} better than attempted template fit {metrics}; NOT ADDING TEMPLATE!")
+                print(f"Best template fit {best_old} better or equal to attempted template fit {metrics}; NOT ADDING TEMPLATE!")
+
         return {
             "template": template,
             "metrics": metrics,
@@ -1031,7 +1110,8 @@ if __name__ == '__main__':
         coord="x",
         ylim = None,
         legend_size = 10,
-        add_seed_params=False
+        add_seed_params=False,
+        use_best_template=False
     ):
         stubborn_track_dataset = np.hstack((X.reshape(-1,1), Y.reshape(-1,1)))
         assert stubborn_track_dataset.shape[0] == X.shape[0]
@@ -1083,7 +1163,7 @@ if __name__ == '__main__':
                 if plot_func is None:
                     raise ValueError("fitPlotFunc=True requires plot_func to be a SymPy expression with float seeds.")
 
-                result = maybe_add_fitted_func_to_templates(plot_func, s_data, y_true, sigma, coord, s_name=s_name)
+                result = maybe_add_fitted_func_to_templates(plot_func, s_data, y_true, sigma, coord, s_name=s_name, use_best_template=use_best_template)
 
                 if result is None:
                     template = make_parametric_template(plot_func, s_name=s_name)
@@ -1230,8 +1310,8 @@ if __name__ == '__main__':
     
     if create_dataset_only:
         base_path = "../stubborn_track_csvs"
-        track_number = 10
-        track_coord = 'X'
+        track_number = 9
+        track_coord = 'Y'
         track_dict = {'X': X, 'Y': Y, 'Z': Z}
         track_sig_dict = {'X': SIG_X_LIST, 'Y': SIG_Y_LIST, 'Z': SIG_Z_LIST}
         assert(track_number <= num_tracks)
@@ -1240,6 +1320,7 @@ if __name__ == '__main__':
         s = sp.Symbol("s")
         print(len(S))
         fitPlotFunc = True
+        use_best_template = not ADD_FUNC_TO_TEMPLATES and True
         np.asin = np.arcsin; np.acos = np.arccos;
         eps = .02
         w = 0.28
@@ -1254,8 +1335,10 @@ if __name__ == '__main__':
              
              sp.sqrt(1 - s**2) + 47.9715483675105*(1.00025526981474 - sp.sqrt(s))*(1.03451633118392 - s)*(-15.5229669626374*sp.sqrt(s) + (22.0639640559243*s - 0.169387092310089)*(-(s - sp.cos(sp.cos(s) - 0.323881403841572))*(sp.acos(s**(1/4)) + 0.37488884525338)*(13.4375388430525*s*(s + 1.88644205199395) + sp.acos(sp.sin(4.00058140697061*s)) + 12.4532239452825) - (3.99997814050942*s - 4.00042312548349)*(0.194293985081638*(s - 0.684729847969017)*sp.sin(10.6714953470386*s) - 5.7277425024394) - 5.04238584837244)*sp.asin(sp.tanh(sp.acos(s))) - 0.152758686104296*sp.sin(28.5515909125915*s) + 82.7178074430341*sp.tanh(4*s) - 3.70717739766979) - 0.311005420129647*(s - sp.sin(16*s - 78.1047952958641*sp.acos(s)))*(-sp.sqrt(s)*sp.tanh(s) + 0.771784354046868*s) - 0.0164279532978721*sp.sin(96.2372260055256*s) - 9.5707963267949*sp.sin(0.0134503159471515*sp.cos(69.4244845389588*s)) - sp.cos(s) - 0.108707226029775*sp.cos(s*(-4.62874098003905*s - 61.7360914152094)) - 0.227765809456258*sp.acos(s)**(1/8) - 0.0643068504087358*sp.acos(s)*(sp.sech(sp.asin(sp.cos(31.7263709278345*s + 31.6529450995372*sp.asin(s) - 1.23965777868236)))) + sp.acos(sp.cos(4.12586583940654*s)) + 431.174465535082*sp.acos((sp.sech(sp.cos(s) - 0.718407394966649))) - 31.1395561959846*sp.asin(sp.cos(sp.sqrt(s) - 0.410731201559706)) + (sp.sech(4104.2069390434*sp.tanh(s - 0.771043790235854) + 7.33665770771229)) + 30.4805027303549*(sp.sech(11.8329408488912*sp.sin(s))) + 7.00977286907249*(sp.sech(sp.asin(s))) - 0.417323183040896 if fitPlotFunc else lambda s: np.sqrt(1 - s**2) + 47.9715483675105*(1.00025526981474 - np.sqrt(s))*(1.03451633118392 - s)*(-15.5229669626374*np.sqrt(s) + (22.0639640559243*s - 0.169387092310089)*(-(s - np.cos(np.cos(s) - 0.323881403841572))*(np.acos(s**(1/4)) + 0.37488884525338)*(13.4375388430525*s*(s + 1.88644205199395) + np.acos(np.sin(4.00058140697061*s)) + 12.4532239452825) - (3.99997814050942*s - 4.00042312548349)*(0.194293985081638*(s - 0.684729847969017)*np.sin(10.6714953470386*s) - 5.7277425024394) - 5.04238584837244)*np.asin(np.tanh(np.acos(s))) - 0.152758686104296*np.sin(28.5515909125915*s) + 82.7178074430341*np.tanh(4*s) - 3.70717739766979) - 0.311005420129647*(s - np.sin(16*s - 78.1047952958641*np.acos(s)))*(-np.sqrt(s)*np.tanh(s) + 0.771784354046868*s) - 0.0164279532978721*np.sin(96.2372260055256*s) - 9.5707963267949*np.sin(0.0134503159471515*np.cos(69.4244845389588*s)) - np.cos(s) - 0.108707226029775*np.cos(s*(-4.62874098003905*s - 61.7360914152094)) - 0.227765809456258*np.acos(s)**(1/8) - 0.0643068504087358*np.acos(s)*(np.sech(np.asin(np.cos(31.7263709278345*s + 31.6529450995372*np.asin(s) - 1.23965777868236)))) + np.acos(np.cos(4.12586583940654*s)) + 431.174465535082*np.acos((np.sech(np.cos(s) - 0.718407394966649))) - 31.1395561959846*np.asin(np.cos(np.sqrt(s) - 0.410731201559706)) + (np.sech(4104.2069390434*np.tanh(s - 0.771043790235854) + 7.33665770771229)) + 30.4805027303549*(np.sech(11.8329408488912*np.sin(s))) + 7.00977286907249*(np.sech(np.asin(s))) - 0.417323183040896,
              
-             (0.0287358167626022 - 0.00712394661940723*s)*sp.tanh(64*s - 64*sp.sin(168.788368820536*s)) - 0.213283773336478*(0.697318395352923 - s)*sp.cos((85.8913821666882 - 16.3346712245428*s)*(s - 2) - 12.2825376750029) + (17.1337427615634*s + 30.4722046456462)*(4*s*(6.4061897227356*s*(s - 0.0569033914506833)*(0.467039135442353*s*sp.tanh(sp.sin(4*s)) - 0.253690954471268*sp.sqrt(1 - s**2) + 4.13512783244562) - 16.2118377674452*s*sp.asin(sp.acos((sp.sech(s)))) - 5.62171429550206*sp.sqrt(s + sp.asin(s)) + 3.18645625685968) - (2.6622414162121*s - 1)*(sp.sqrt(s)*(s - 0.128982654313321) + 0.12888067967297*sp.sin(10.6415385122204*s) + 0.506301933651683) - sp.tanh(sp.asin((sp.sech(17.1500695201152*s))))) - 1.44560779884151*sp.sin(51.0727674445071*s) + 1.3466702772686*sp.sin(51.4695471152235*s) + 0.534074778210937*sp.sin(s*(sp.acos(s) - 46.6177357352168)) - 24.4816144663704*sp.sin(sp.cos(7.16097575179141*s - 0.449304692850924)) + 0.459303428337985*sp.cos(39.2597406877472*s) + 0.192539015198248*sp.cos(63.3624466252343*s) + 37.4807272000627*sp.acos(sp.cos(sp.acos(s) - 0.660797947851642)) if fitPlotFunc else lambda s: (0.0287358167626022 - 0.00712394661940723*s)*np.tanh(64*s - 64*np.sin(168.788368820536*s)) - 0.213283773336478*(0.697318395352923 - s)*np.cos((85.8913821666882 - 16.3346712245428*s)*(s - 2) - 12.2825376750029) + (17.1337427615634*s + 30.4722046456462)*(4*s*(6.4061897227356*s*(s - 0.0569033914506833)*(0.467039135442353*s*np.tanh(np.sin(4*s)) - 0.253690954471268*np.sqrt(1 - s**2) + 4.13512783244562) - 16.2118377674452*s*np.asin(np.acos((np.sech(s)))) - 5.62171429550206*np.sqrt(s + np.asin(s)) + 3.18645625685968) - (2.6622414162121*s - 1)*(np.sqrt(s)*(s - 0.128982654313321) + 0.12888067967297*np.sin(10.6415385122204*s) + 0.506301933651683) - np.tanh(np.asin((np.sech(17.1500695201152*s))))) - 1.44560779884151*np.sin(51.0727674445071*s) + 1.3466702772686*np.sin(51.4695471152235*s) + 0.534074778210937*np.sin(s*(np.acos(s) - 46.6177357352168)) - 24.4816144663704*np.sin(np.cos(7.16097575179141*s - 0.449304692850924)) + 0.459303428337985*np.cos(39.2597406877472*s) + 0.192539015198248*np.cos(63.3624466252343*s) + 37.4807272000627*np.acos(np.cos(np.acos(s) - 0.660797947851642))
-            ][3]
+             (0.0287358167626022 - 0.00712394661940723*s)*sp.tanh(64*s - 64*sp.sin(168.788368820536*s)) - 0.213283773336478*(0.697318395352923 - s)*sp.cos((85.8913821666882 - 16.3346712245428*s)*(s - 2) - 12.2825376750029) + (17.1337427615634*s + 30.4722046456462)*(4*s*(6.4061897227356*s*(s - 0.0569033914506833)*(0.467039135442353*s*sp.tanh(sp.sin(4*s)) - 0.253690954471268*sp.sqrt(1 - s**2) + 4.13512783244562) - 16.2118377674452*s*sp.asin(sp.acos((sp.sech(s)))) - 5.62171429550206*sp.sqrt(s + sp.asin(s)) + 3.18645625685968) - (2.6622414162121*s - 1)*(sp.sqrt(s)*(s - 0.128982654313321) + 0.12888067967297*sp.sin(10.6415385122204*s) + 0.506301933651683) - sp.tanh(sp.asin((sp.sech(17.1500695201152*s))))) - 1.44560779884151*sp.sin(51.0727674445071*s) + 1.3466702772686*sp.sin(51.4695471152235*s) + 0.534074778210937*sp.sin(s*(sp.acos(s) - 46.6177357352168)) - 24.4816144663704*sp.sin(sp.cos(7.16097575179141*s - 0.449304692850924)) + 0.459303428337985*sp.cos(39.2597406877472*s) + 0.192539015198248*sp.cos(63.3624466252343*s) + 37.4807272000627*sp.acos(sp.cos(sp.acos(s) - 0.660797947851642)) if fitPlotFunc else lambda s: (0.0287358167626022 - 0.00712394661940723*s)*np.tanh(64*s - 64*np.sin(168.788368820536*s)) - 0.213283773336478*(0.697318395352923 - s)*np.cos((85.8913821666882 - 16.3346712245428*s)*(s - 2) - 12.2825376750029) + (17.1337427615634*s + 30.4722046456462)*(4*s*(6.4061897227356*s*(s - 0.0569033914506833)*(0.467039135442353*s*np.tanh(np.sin(4*s)) - 0.253690954471268*np.sqrt(1 - s**2) + 4.13512783244562) - 16.2118377674452*s*np.asin(np.acos((np.sech(s)))) - 5.62171429550206*np.sqrt(s + np.asin(s)) + 3.18645625685968) - (2.6622414162121*s - 1)*(np.sqrt(s)*(s - 0.128982654313321) + 0.12888067967297*np.sin(10.6415385122204*s) + 0.506301933651683) - np.tanh(np.asin((np.sech(17.1500695201152*s))))) - 1.44560779884151*np.sin(51.0727674445071*s) + 1.3466702772686*np.sin(51.4695471152235*s) + 0.534074778210937*np.sin(s*(np.acos(s) - 46.6177357352168)) - 24.4816144663704*np.sin(np.cos(7.16097575179141*s - 0.449304692850924)) + 0.459303428337985*np.cos(39.2597406877472*s) + 0.192539015198248*np.cos(63.3624466252343*s) + 37.4807272000627*np.acos(np.cos(np.acos(s) - 0.660797947851642)),
+             
+            -5.50466591089477*s*(1.70039722527395 - s)*(-s - 0.0162295845807038)*(4.00737733483285*s - 4.00940995245073)*((sp.sech(3.27367950400572*s - 1.48312792190553)) - 0.754090581680331)*sp.asin(sp.cos((-4*s - 37.4920191217381)*(s + sp.tanh(s) + 4.00002891030393))) + 535.769518012801*s*(-10.0376306641134*sp.sqrt(s) - 7.81415301248505*s + 7.23578184327598*sp.tanh(2*s) + sp.tanh(31.195486795312*s) + 4) - s*sp.acos(sp.sin(15.5503305424751*s - 0.970964358141088))*sp.asin(sp.sin(s + 0.516916539837922) - 0.924353328910169)*sp.asin(sp.cos(126.9028116316*s - 1.6331153880208)) + 0.120548878924122*s*sp.asin(sp.cos(1.01538655627536*s*(4.00006692964641*s + 102.332482578604) + 1.17325346410979)) - 1082.65217074294*s*(sp.sech(s)) + (0.0534168631709986 - 0.0693124972816619*(sp.sech(sp.sin(108.320167745834*s + 0.615056646341812))))*(-s + sp.cos(s) + 0.0756661568410857) - 46.2653787678379*(0.644755504616641 - sp.sin(11.8173417825201*s))*(s - 0.687742250304036)*sp.acos(s) - 0.0244265790108815*(s + 0.538161191921888)*sp.sin((2.00001210737461*s + 5.0169336236088)*(21.8952678654529*s + 34.3728366428198)) - (4.00089311512484*s + 4.23937111593429)*(-sp.sin(s) + sp.asin(s))*(-1613.50233696944*sp.acos(s) - 1167.10664756326)*sp.cos(sp.sqrt(s)) + (s + (sp.sech(s)) + 4.58473418203009)*sp.sin(s**(1/4) - (sp.sech((2.29735129775006*sp.sqrt(s) - 1.15890988945187)*sp.asin(2*s - 1) + 0.65074441378254)))*sp.asin(sp.sin(6.49311574476857*s**(1/4) - 0.588391476120246)) - 1.45293163608378*sp.sin(s*(43.5991491705392 - 2.06239251465106*s)) - sp.tanh((-0.016393191610065*s - 0.02275708788162)*sp.sin((6.21191148457236*s - 31.2105996780386)*(8.99995080796468*s + 0.892110946959537))) + sp.sqrt(sp.acos(s)) + sp.asin(s) + 0.0120441963998886*sp.asin(sp.cos(s*(4.18629445523148*s*(s + 11.3960056045401) - 80.788176988262*s - 327.098464614774))) - 0.573225484901637*sp.asin(sp.cos(1.44846490298103*sp.cos(3.94581257526148*s) + 168.663012300412*(sp.sech(s)) - 1.38846029999576)) - 71.2112238107356*sp.asin((sp.sech(4*s - 0.596904625008991))) + 0.36956098143931*sp.asin((sp.sech(sp.asin(sp.cos(6.09468986977017*s + 4.00119945258325*sp.cos(15.982571718891*s) + 0.391750902006813))))) + 0.808105974831905*(sp.sech(sp.tanh(6.25564309412623*s)*sp.tanh(sp.tanh(sp.sqrt(sp.acos(-sp.sin(9.5911944201174*sp.sqrt(s)*(s + sp.cos(sp.sqrt((sp.sech(s)))) + 1.44047618858378) + 153.461616832355*s + 5.23019493782362))) - 0.864866279863255)))) - (sp.sech(0.472210848832586*sp.tanh((s - 0.620172924169831)*sp.asin(s) + sp.cos(144.079890357557*s) + 0.957252169757047) - 0.597752470427521)) + 52.2397231623041*(sp.sech(sp.cos(10.9149195017235*s - 0.268388476005615))) - 0.122858811898602 if fitPlotFunc else lambda s: -5.50466591089477*s*(1.70039722527395 - s)*(-s - 0.0162295845807038)*(4.00737733483285*s - 4.00940995245073)*((np.sech(3.27367950400572*s - 1.48312792190553)) - 0.754090581680331)*np.asin(np.cos((-4*s - 37.4920191217381)*(s + np.tanh(s) + 4.00002891030393))) + 535.769518012801*s*(-10.0376306641134*np.sqrt(s) - 7.81415301248505*s + 7.23578184327598*np.tanh(2*s) + np.tanh(31.195486795312*s) + 4) - s*np.acos(np.sin(15.5503305424751*s - 0.970964358141088))*np.asin(np.sin(s + 0.516916539837922) - 0.924353328910169)*np.asin(np.cos(126.9028116316*s - 1.6331153880208)) + 0.120548878924122*s*np.asin(np.cos(1.01538655627536*s*(4.00006692964641*s + 102.332482578604) + 1.17325346410979)) - 1082.65217074294*s*(np.sech(s)) + (0.0534168631709986 - 0.0693124972816619*(np.sech(np.sin(108.320167745834*s + 0.615056646341812))))*(-s + np.cos(s) + 0.0756661568410857) - 46.2653787678379*(0.644755504616641 - np.sin(11.8173417825201*s))*(s - 0.687742250304036)*np.acos(s) - 0.0244265790108815*(s + 0.538161191921888)*np.sin((2.00001210737461*s + 5.0169336236088)*(21.8952678654529*s + 34.3728366428198)) - (4.00089311512484*s + 4.23937111593429)*(-np.sin(s) + np.asin(s))*(-1613.50233696944*np.acos(s) - 1167.10664756326)*np.cos(np.sqrt(s)) + (s + (np.sech(s)) + 4.58473418203009)*np.sin(s**(1/4) - (np.sech((2.29735129775006*np.sqrt(s) - 1.15890988945187)*np.asin(2*s - 1) + 0.65074441378254)))*np.asin(np.sin(6.49311574476857*s**(1/4) - 0.588391476120246)) - 1.45293163608378*np.sin(s*(43.5991491705392 - 2.06239251465106*s)) - np.tanh((-0.016393191610065*s - 0.02275708788162)*np.sin((6.21191148457236*s - 31.2105996780386)*(8.99995080796468*s + 0.892110946959537))) + np.sqrt(np.acos(s)) + np.asin(s) + 0.0120441963998886*np.asin(np.cos(s*(4.18629445523148*s*(s + 11.3960056045401) - 80.788176988262*s - 327.098464614774))) - 0.573225484901637*np.asin(np.cos(1.44846490298103*np.cos(3.94581257526148*s) + 168.663012300412*(np.sech(s)) - 1.38846029999576)) - 71.2112238107356*np.asin((np.sech(4*s - 0.596904625008991))) + 0.36956098143931*np.asin((np.sech(np.asin(np.cos(6.09468986977017*s + 4.00119945258325*np.cos(15.982571718891*s) + 0.391750902006813))))) + 0.808105974831905*(np.sech(np.tanh(6.25564309412623*s)*np.tanh(np.tanh(np.sqrt(np.acos(-np.sin(9.5911944201174*np.sqrt(s)*(s + np.cos(np.sqrt((np.sech(s)))) + 1.44047618858378) + 153.461616832355*s + 5.23019493782362))) - 0.864866279863255)))) - (np.sech(0.472210848832586*np.tanh((s - 0.620172924169831)*np.asin(s) + np.cos(144.079890357557*s) + 0.957252169757047) - 0.597752470427521)) + 52.2397231623041*(np.sech(np.cos(10.9149195017235*s - 0.268388476005615))) - 0.122858811898602
+            ][6]
 
         plot_func_eqn = (r"$"+track_coord.lower()+r"(s)$").replace("x_{0}","s")
 #        plot_func = None
@@ -1270,12 +1353,14 @@ if __name__ == '__main__':
         sigma_dat = track_sig_dict[track_coord][track_number-1];# sigma_min = min(SIG_Z_LIST[track_number-1]); sigma_max = max(SIG_Z_LIST[track_number-1]);
 #        sigma_dat = np.linspace(sigma_min, sigma_max, N_dat)
         
-        create_stubborn_track_dataset(x_dat, y_dat, file_path = file_path, show  = True, plot_func = plot_func, latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-50, 200), sigma = sigma_dat, legend_size = 6, add_seed_params = add_seed_params)
+        create_stubborn_track_dataset(x_dat, y_dat, file_path = file_path, show  = True, plot_func = plot_func, \
+                                        latex_eqn = plot_func_eqn, fitPlotFunc = fitPlotFunc, coord = coord, ylim = (-50, 200), \
+                                        sigma = sigma_dat, legend_size = 6, add_seed_params = add_seed_params, use_best_template = use_best_template)
 
     model_kwargs = dict(
         niterations=100,
-        binary_operators=["+", "-", "*"],
-        unary_operators=["neg", "sin", "cos", "tanh", "sqrt", "sech"],
+        binary_operators=["+", "-", "*",  "^"],
+        unary_operators=["neg", "sin", "cos", "tanh", "sqrt", "sech", "asin", "acos"],
         extra_sympy_mappings={"sech": lambda x: sp.sech(x)},
         maxsize=9,
         model_selection="accuracy",
@@ -1358,7 +1443,7 @@ if __name__ == '__main__':
             # 2) If good enough, use best template
             if templates and best_metrics is not None:
                 if is_weighted():
-                    if abs(best_metrics["chi2_red"] - CHI2_RED_TARGET) <= CHI2_RED_TOL:
+                    if best_metrics["chi2_red"] < CHI2_RED_TARGET:
                         print(
                             f"[Track {track_idx} {coord_name}] Used existing template {best_template_index} "
                             f"with chi2_red={best_metrics['chi2_red']:.3f} (target 1)"
@@ -1586,6 +1671,10 @@ if __name__ == '__main__':
         r2_x_all.append(m_x["R2"])
         r2_y_all.append(m_y["R2"])
         r2_z_all.append(m_z["R2"])
+        
+        chi2_x_all.append(m_x["chi2_red"])
+        chi2_y_all.append(m_y["chi2_red"])
+        chi2_z_all.append(m_z["chi2_red"])
 
         # LaTeX strings
         eq_x = r"$x(s) = " + sympy_to_latex_with_s(expr_x) + "$"
@@ -1623,12 +1712,6 @@ if __name__ == '__main__':
         x_pred = fx(s_plot)
         y_pred = fy(s_plot)
         z_pred = fz(s_plot)
-        
-        if is_standard_model_dataset and sm_popt is not None:
-            # phi-fit => evaluate with helix_xyz_phi at the hit phis (NO s_plot)
-            phi_unwrap = np.unwrap(np.arctan2(y_all, x_all))
-            x_sm, y_sm, z_sm = helix_xyz_phi(phi_unwrap, sm_popt)
-            chi2nu_sm = sm_metrics["chi2_red"]
 
         fig, axes = plt.subplots(3, 1, figsize=(9, 10), sharex=True)
         MAX_EQ_CHARS = 80  # tune
@@ -1677,7 +1760,7 @@ if __name__ == '__main__':
         if is_standard_model_dataset and (sm_z is not None):
             axes[2].plot(s_all, z_sm, linewidth=2, linestyle="--", label=fr"SM helix: $\chi^2_\nu={chi2nu_sm:.3e}$")
         axes[2].set_ylabel("$z$")
-        axes[2].set_xlabel("normalized arc length") 
+        axes[2].set_xlabel(r"reconstructed helix phase $\phi$" if independent_param == "phi" else "normalized arc length")
         axes[2].legend(fontsize=8)
 
         plt.tight_layout()
@@ -1732,9 +1815,12 @@ if __name__ == '__main__':
 
     print("\n"*10)
 
+    weighted_flag = (SIG_X_LIST[0] is not None)
     latex_3d_table, triple_id_map = summarize_3d_families(
         families_x, families_y, families_z,
-        r2_x_all, r2_y_all, r2_z_all
+        r2_x_all, r2_y_all, r2_z_all,
+        chi2_x_all, chi2_y_all, chi2_z_all,
+        weighted=weighted_flag
     )
     latex_3d_eqns = latex_equations_for_3d_families(
         triple_id_map,
