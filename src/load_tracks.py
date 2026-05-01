@@ -63,16 +63,17 @@ def load_single_track(csv_path, param="arc"):
 
     return s, x, y, z, sig_x, sig_y, sig_z
 
-def load_many_tracks(folder_path, max_tracks=None, min_hits=6, param = "arc"):
+def load_many_tracks(folder_path, offset = 0, max_tracks=None, min_hits=6, param = "arc"):
     print(f"folder_path = {folder_path}")
     files = sorted(glob.glob(os.path.join(folder_path, "*-hits.csv")))
+    assert(offset < len(files))
     print(f"Found {len(files)} tracks.")
 
     S, X, Y, Z, F = [], [], [], [], []
     SIG_X, SIG_Y, SIG_Z = [], [], []
 
     count = 0
-    for f in files:
+    for f in files[offset:]:
         print(f"Loading file {f}")
         try:
             # load_single_track returns (s, x, y, z, sig_x, sig_y, sig_z, meta)

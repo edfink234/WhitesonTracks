@@ -22,8 +22,8 @@ INPUTS = {
     "LARGEST_LAYER": 53.0,
 
     # Fourier settings
-    "FOURIER_DIM_TRAIN": 25,
-    "FOURIER_DIM_TEST": 25,
+    "FOURIER_DIM_TRAIN": 5,
+    "FOURIER_DIM_TEST": 5,
     "TRAIN_FUNCTION": 3,
     "TEST_FUNCTION": 3,
 
@@ -37,7 +37,15 @@ INPUTS = {
     "HIT_NOISE_SIGMA_Z": 0.01,
     
     # Standard Model?
-    "STANDARD_MODEL": False
+    "STANDARD_MODEL": False,
+    # Random Noise?
+    "RANDOM_NOISE_MODEL": True,
+
+    # Random-noise track controls
+    "RANDOM_NOISE_STEP_SCALE_XY": 1.5,
+    "RANDOM_NOISE_STEP_SCALE_Z": 4.0,
+    "RANDOM_NOISE_SMOOTHING_PASSES": 10,
+    "RANDOM_NOISE_K": 15, #down-sampling factor
 }
 
 # Physical Constants
@@ -89,6 +97,8 @@ def make_dataset_name(INPUTS):
         parts.append("noiseless")
     if INPUTS.get("STANDARD_MODEL", False):
         parts.append("standardModel")
+    elif INPUTS.get("RANDOM_NOISE_MODEL", False):
+        parts.append("randomNoise")
 
     return "v" + datetime.now().strftime("%Y%m%d_%H%M%S") + "__" + "__".join(parts)
 
@@ -113,6 +123,17 @@ ADD_HIT_NOISE      = INPUTS.get("ADD_HIT_NOISE", False)
 WRITE_HIT_SIGMAS   = INPUTS.get("WRITE_HIT_SIGMAS", True)
 # Standard Model?
 STANDARD_MODEL = INPUTS.get("STANDARD_MODEL", False)
+# Random Noise?
+RANDOM_NOISE_MODEL = INPUTS.get("RANDOM_NOISE_MODEL", False)
+print("RANDOM_NOISE_MODEL =", RANDOM_NOISE_MODEL)
+RANDOM_NOISE_K = INPUTS.get("RANDOM_NOISE_K", False)
+
+if STANDARD_MODEL and RANDOM_NOISE_MODEL:
+    raise ValueError("Choose at most one of STANDARD_MODEL or RANDOM_NOISE_MODEL.")
+    
+RANDOM_NOISE_STEP_SCALE_XY = float(INPUTS.get("RANDOM_NOISE_STEP_SCALE_XY", 1.5))
+RANDOM_NOISE_STEP_SCALE_Z  = float(INPUTS.get("RANDOM_NOISE_STEP_SCALE_Z", 4.0))
+RANDOM_NOISE_SMOOTHING_PASSES = int(INPUTS.get("RANDOM_NOISE_SMOOTHING_PASSES", 3))
 
 ATLASradii = np.linspace(smallest_layer, largest_layer, num_layers)
 
@@ -220,8 +241,8 @@ def make_tracks_from_fourier_balls(chunk_size, fourierDim, radii, min_radii, cen
     hyper_fourier_points = []
     for dimension in range(fourierDim):
         hyper_fourier_points.append(sample_from_ball(chunk_size,max_radius = radii[dimension], min_radius = min_radii[dimension],center=centers[dimension]))
-    print(len(hyper_fourier_points))
-    print(hyper_fourier_points[0].shape)
+#    print(len(hyper_fourier_points))
+#    print(hyper_fourier_points[0].shape)
 #    print([i.shape for i in hyper_fourier_points])
 #    print([hyper_fourier_points[0].shape == i.shape for i in hyper_fourier_points])
 #    print(all([hyper_fourier_points[0].shape == i.shape for i in hyper_fourier_points]))
@@ -241,7 +262,7 @@ def fourierExpand(fourierDim, Lambda, t, chunk_size = chunk_size):
     return (fourList, shift)
 
 # add near the other helpers, e.g. after fourierExpand(...)
-def build_track_latex(STANDARD_MODEL, fourierDim=None, Lambda=None):
+def build_track_latex(STANDARD_MODEL, RANDOM_NOISE_MODEL=False, fourierDim=None, Lambda=None):
     if STANDARD_MODEL:
         return {
             "model_type": "STANDARD_MODEL",
@@ -250,6 +271,15 @@ def build_track_latex(STANDARD_MODEL, fourierDim=None, Lambda=None):
             "latex_z": r"z(t) = z_0 + \left(\frac{p_z}{p_T}\right) R_{\mathrm{cm}}\left[\phi(t)-\phi_0\right]",
             "latex_phi": r"\phi(t)=\phi_0 + q\,\phi_{\mathrm{scale}}\,t",
             "latex_r": r"r(t)=\sqrt{x(t)^2+y(t)^2}"
+        }
+    elif RANDOM_NOISE_MODEL:
+        return {
+            "model_type": "RANDOM_NOISE",
+            "latex_x": r"x(t)=x_0+\sum_{k=1}^{t}\Delta x_k",
+            "latex_y": r"y(t)=y_0+\sum_{k=1}^{t}\Delta y_k",
+            "latex_z": r"z(t)=z_0+\sum_{k=1}^{t}\Delta z_k",
+            "latex_r": r"r(t)=\sqrt{x(t)^2+y(t)^2}",
+            "latex_phi": r"\phi(t)=\operatorname{atan2}(y(t),x(t))"
         }
     else:
         terms_x = [
@@ -484,6 +514,65 @@ def tracks_standard_model_helix_cm_with_min_hits(
     # Optionally you can return (tracks, best_scores) to inspect how many hits each track has
     return (tracks, best_scores)  # in cm
 
+def tracks_random_noise_xyz_cm(
+    t,
+    chunk_size,
+    radii,
+    detector_length,
+    step_scale_xy=1.5,
+    step_scale_z=4.0,
+    smoothing_passes=3,
+    random_seed=None,
+):
+    rng = np.random.RandomState(random_seed) if random_seed is not None else np.random
+    t = np.asarray(t)
+    nt = len(t)
+
+    tracks = np.zeros((nt, chunk_size, 3), dtype=float)
+
+    rmin = float(np.min(radii))
+    rmax = float(np.max(radii))
+
+    for j in range(chunk_size):
+        # random walk increments
+        dx = rng.normal(0.0, step_scale_xy, size=nt)
+        dy = rng.normal(0.0, step_scale_xy, size=nt)
+        dz = rng.normal(0.0, step_scale_z,  size=nt)
+
+        x = np.cumsum(dx)
+        y = np.cumsum(dy)
+        z = np.cumsum(dz)
+
+        # optional smoothing to avoid ultra-jagged nonsense
+        for _ in range(max(0, smoothing_passes)):
+            x = np.convolve(x, np.ones(5)/5.0, mode="same")
+            y = np.convolve(y, np.ones(5)/5.0, mode="same")
+            z = np.convolve(z, np.ones(5)/5.0, mode="same")
+
+        # center the track
+        x -= np.mean(x)
+        y -= np.mean(y)
+        z -= np.mean(z)
+
+        # scale transverse extent to detector radius
+        r = np.sqrt(x*x + y*y)
+        rmax_track = max(np.max(r), 1e-6)
+        target_rmax = rng.uniform(0.6 * rmax, 0.95 * rmax)
+        xy_scale = target_rmax / rmax_track
+        x *= xy_scale
+        y *= xy_scale
+
+        # scale z extent to detector length
+        zmax_track = max(np.max(np.abs(z)), 1e-6)
+        target_zmax = rng.uniform(0.3 * detector_length, 0.9 * detector_length) / 2.0
+        z *= (target_zmax / zmax_track)
+
+        tracks[:, j, 0] = x
+        tracks[:, j, 1] = y
+        tracks[:, j, 2] = z
+
+    return tracks
+
 def tracks_cylindrical_fourier_balls(t,fourierDim, Lambda, chunk_size, radii, min_radii, centers):
 
     #tracemalloc.start()
@@ -555,14 +644,34 @@ def map_curve_to_hits(curve, min_dist_to_detector_layer):
 
     #append the layer id to the hits
     layerID = ((closest_layer_per_point + np.ones_like(closest_layer_per_point))[hit_indices])
+    if RANDOM_NOISE_MODEL:
+        hits = hits[::RANDOM_NOISE_K]
+        layerID = layerID[::RANDOM_NOISE_K]
     hits = np.concatenate((hits, (layerID[np.newaxis, :]).T), axis = 1)
     return hits
 
-def make_list_of_hits_from_fourier_balls(chunk_size, Radii, min_radii, fourierDim, times, Centers, Lambda = np.max(ATLASradii), min_dist_to_detector_layer = 0.001):
+def make_list_of_hits_from_track_model(chunk_size, Radii, min_radii, fourierDim, times, Centers, Lambda = np.max(ATLASradii), min_dist_to_detector_layer = 0.001):
     #Tracks has shape (chunk_size_train,fourDimTrain)
     Tracks = None
     if STANDARD_MODEL:
         Tracks_xyz, best_scores = tracks_standard_model_helix_cm_with_min_hits(t=times, chunk_size=chunk_size, radii=ATLASradii, detector_length=detector_length, B_field=bField, random_seed=42)
+        x = Tracks_xyz[:, :, 0]
+        y = Tracks_xyz[:, :, 1]
+        z = Tracks_xyz[:, :, 2]
+        r = np.sqrt(x*x + y*y)
+        phi = np.arctan2(y, x)
+        Tracks = np.stack([r, phi, z], axis=2)
+    elif RANDOM_NOISE_MODEL:
+        Tracks_xyz = tracks_random_noise_xyz_cm(
+            t=times,
+            chunk_size=chunk_size,
+            radii=ATLASradii,
+            detector_length=detector_length,
+            step_scale_xy=RANDOM_NOISE_STEP_SCALE_XY,
+            step_scale_z=RANDOM_NOISE_STEP_SCALE_Z,
+            smoothing_passes=RANDOM_NOISE_SMOOTHING_PASSES,
+            random_seed=42,
+        )
         x = Tracks_xyz[:, :, 0]
         y = Tracks_xyz[:, :, 1]
         z = Tracks_xyz[:, :, 2]
@@ -761,7 +870,7 @@ def make_track_hits_and_curve_plot(curve_df, hits_df, *, out_file, title="", sho
 def prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer, 
                        event_id_minus_event, final_iteration = False, signal_hits = None, remaining_events_after_chunks = None):
     if final_iteration == False:
-        signal_hits = make_list_of_hits_from_fourier_balls(chunk_size, fourierRadii, min_radii, fourierDim,times , fourierCenters,Lambda , 
+        signal_hits = make_list_of_hits_from_track_model(chunk_size, fourierRadii, min_radii, fourierDim,times , fourierCenters,Lambda , 
                                                            min_dist_to_detector_layer)
 #        print(f"signal_hits = {signal_hits}")
 #        print(f"len(signal_hits) = {len(signal_hits)}")
@@ -822,7 +931,7 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
     manifest_path = os.path.join(dataset_dir, "manifest.json")
     
     if not os.path.exists(manifest_path):
-        latex_info = build_track_latex(STANDARD_MODEL=STANDARD_MODEL, fourierDim=fourierDim, Lambda=Lambda)
+        latex_info = build_track_latex(STANDARD_MODEL=STANDARD_MODEL, RANDOM_NOISE_MODEL=RANDOM_NOISE_MODEL, fourierDim=fourierDim, Lambda=Lambda)
         manifest = {
             "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "NUM_TRAIN_TRACKS": train_size,
@@ -841,7 +950,12 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
             "HIT_NOISE_SIGMA_Z": HIT_NOISE_SIGMA_Z,
             "WRITE_HIT_SIGMAS": WRITE_HIT_SIGMAS,
             "STANDARD_MODEL": STANDARD_MODEL,
-            "track_latex": latex_info,
+            "RANDOM_NOISE_MODEL": RANDOM_NOISE_MODEL,
+            "RANDOM_NOISE_STEP_SCALE_XY": RANDOM_NOISE_STEP_SCALE_XY,
+            "RANDOM_NOISE_STEP_SCALE_Z": RANDOM_NOISE_STEP_SCALE_Z,
+            "RANDOM_NOISE_SMOOTHING_PASSES": RANDOM_NOISE_SMOOTHING_PASSES,
+            "RANDOM_NOISE_K": RANDOM_NOISE_K,
+            "track_latex": latex_info
         }
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
@@ -870,8 +984,8 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
                             event_id_minus_event, final_iteration = False, signal_hits = None, remaining_events_after_chunks = None)
             
     if remaining_events_after_chunks > 0:
-        signal_hits = make_list_of_hits_from_fourier_balls(remaining_events_after_chunks, fourierRadii, min_radii, fourierDim,times , 
-                                                        fourierCenters,Lambda , min_dist_to_detector_layer)
+        signal_hits = make_list_of_hits_from_track_model(remaining_events_after_chunks, fourierRadii, min_radii, fourierDim, times,
+                                                        fourierCenters, Lambda, min_dist_to_detector_layer)
         for event in range(remaining_events_after_chunks):
             if datatype == 'train':
                 event_id = event + number_of_chunks * chunk_size + 1
@@ -882,8 +996,7 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
 
 
             prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer, 
-                            event_id, final_iteration = True, signal_hits = signal_hits, 
-                            remaining_events_after_chunks = remaining_events_after_chunks)
+                            event_id, final_iteration = True, signal_hits = signal_hits, remaining_events_after_chunks = remaining_events_after_chunks)
     
     print("\n==================== OUTPUT SUMMARY ====================")
     print(f"Script location: {os.path.abspath(__file__)}")
