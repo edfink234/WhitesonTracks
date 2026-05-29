@@ -12,8 +12,8 @@ from os import system
 INPUTS = {
     # Required in practice
     "OUTPUT_FOLDER": "",
-    "NUM_TRAIN_TRACKS": 5,
-    "NUM_TEST_TRACKS": 5,
+    "NUM_TRAIN_TRACKS": 50,
+    "NUM_TEST_TRACKS": 50,
 
     # Detector geometry
     "NUMBER_OF_LAYERS": 25,
@@ -22,10 +22,10 @@ INPUTS = {
     "LARGEST_LAYER": 53.0,
 
     # Fourier settings
-    "FOURIER_DIM_TRAIN": 5,
-    "FOURIER_DIM_TEST": 5,
-    "TRAIN_FUNCTION": 3,
-    "TEST_FUNCTION": 3,
+    "FOURIER_DIM_TRAIN": 25,
+    "FOURIER_DIM_TEST": 25,
+    "TRAIN_FUNCTION": 2,
+    "TEST_FUNCTION": 2,
 
     # Train/test split behavior
     "DISJOINT": False,
@@ -38,6 +38,7 @@ INPUTS = {
     
     # Standard Model?
     "STANDARD_MODEL": False,
+    
     # Random Noise?
     "RANDOM_NOISE_MODEL": True,
 
@@ -644,7 +645,7 @@ def map_curve_to_hits(curve, min_dist_to_detector_layer):
 
     #append the layer id to the hits
     layerID = ((closest_layer_per_point + np.ones_like(closest_layer_per_point))[hit_indices])
-    if RANDOM_NOISE_MODEL:
+    if RANDOM_NOISE_MODEL: #Random noise tracks have roughly RANDOM_NOISE_K more hits
         hits = hits[::RANDOM_NOISE_K]
         layerID = layerID[::RANDOM_NOISE_K]
     hits = np.concatenate((hits, (layerID[np.newaxis, :]).T), axis = 1)

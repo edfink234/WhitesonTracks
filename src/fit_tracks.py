@@ -13,7 +13,31 @@ import re
 import pandas as pd
 import math
 import glob
+import time
 USE_K = False
+USE_ANALYTIC_JAC = False
+
+def add_or_update_template(template_list, template, path, coord):
+    sig_new = template_signature(template)
+
+    for i, old in enumerate(template_list):
+        if template_signature(old) == sig_new:
+            has_new_seed = ("seed_params" in template) and (template["seed_params"] is not None)
+            has_old_seed = ("seed_params" in old) and (old["seed_params"] is not None)
+
+            if has_new_seed and not has_old_seed:
+                template_list[i] = template
+                print(f"[autoscan] Updated {coord}_templates seed params from {path}")
+            elif has_new_seed and has_old_seed:
+                template_list[i] = template
+                print(f"[autoscan] Replaced existing seeded {coord}_template from {path}")
+            else:
+                print(f"[autoscan] Existing {coord}_template already present; skipping {path}")
+
+            return
+
+    template_list.append(template)
+    print(f"[autoscan] Added seed template to {coord}_templates from {path}")
 
 def autoscan_seed_templates(x_templates, y_templates, z_templates):
     """
@@ -21,6 +45,7 @@ def autoscan_seed_templates(x_templates, y_templates, z_templates):
     into the appropriate template lists.
     """
     pkl_paths = glob.glob("*_template.pkl") + glob.glob("../stubborn_track_csvs/*_template.pkl")
+    print("pkl_paths =", pkl_paths)
     for path in pkl_paths:
         try:
             with open(path, "rb") as f:
@@ -43,17 +68,11 @@ def autoscan_seed_templates(x_templates, y_templates, z_templates):
         sig_new = template_signature(template)
 
         if coord == "x":
-            if not any(template_signature(t) == sig_new for t in x_templates):
-                x_templates.append(template)
-                print(f"[autoscan] Added seed template to x_templates from {path}")
+            add_or_update_template(x_templates, template, path, "x")
         elif coord == "y":
-            if not any(template_signature(t) == sig_new for t in y_templates):
-                y_templates.append(template)
-                print(f"[autoscan] Added seed template to y_templates from {path}")
+            add_or_update_template(y_templates, template, path, "y")
         elif coord == "z":
-            if not any(template_signature(t) == sig_new for t in z_templates):
-                z_templates.append(template)
-                print(f"[autoscan] Added seed template to z_templates from {path}")
+            add_or_update_template(z_templates, template, path, "z")
 
 def _fmt_float_latex(x: float, sig: int = 3, sci_cut: float = 1e-3) -> str:
     """Return latex for a float. Use scientific notation if |x| < sci_cut and x != 0."""
@@ -89,24 +108,57 @@ sech = lambda x: 1/np.cosh(x)
 
 def template_signature(template_or_expr, round_digits=8):
     """
-    Return a canonical structural signature string for a sympy expression or parametric template.
-    Uses rounding to reduce floating-point fractional differences, then srepr(simplified_expr).
+    Canonical structural signature for a template, ignoring parameter names.
+
+    This makes these equivalent:
+      a0 + a2*sin(a1 + s)
+      a1 + a2*sin(a0 + s)
+      a0*sin(a2 + s) + a1
     """
     if isinstance(template_or_expr, dict):
         expr = template_or_expr["expr"]
+        s_sym = template_or_expr.get("s_sym", sp.Symbol("s"))
+        param_syms = list(template_or_expr.get("param_syms", []))
     else:
         expr = template_or_expr
+        s_sym = sp.Symbol("s")
+        param_syms = sorted(
+            [x for x in expr.free_symbols if x.name.startswith("a")],
+            key=lambda x: x.name,
+        )
 
-    # Round floats (helper defined earlier)
-    expr_rounded = round_floats(expr, round_digits)
+    expr = round_floats(expr, round_digits)
 
-#    try:
-#        expr_simpl = sp.simplify(expr_rounded)
-#    except Exception:
-    expr_simpl = expr_rounded
+    # Normalize independent variable name.
+    expr = expr.xreplace({s_sym: sp.Symbol("s")})
 
-    # srepr gives a structural representation (stable for equivalence checks)
-    return sp.srepr(expr_simpl)
+    # Normalize parameter names by first occurrence in the expression tree.
+    canonical_params = {}
+    counter = 0
+
+    def visit(e):
+        nonlocal counter
+
+        if e == sp.Symbol("s"):
+            return e
+
+        if e in param_syms:
+            if e not in canonical_params:
+                canonical_params[e] = sp.Symbol(f"p{counter}")
+                counter += 1
+            return canonical_params[e]
+
+        if not e.args:
+            return e
+
+        return e.func(*[visit(arg) for arg in e.args])
+
+    expr = visit(expr)
+
+    # Let SymPy canonicalize commutative Add/Mul ordering.
+    expr = sp.expand_mul(expr)
+
+    return sp.srepr(expr)
 
 def sci_to_latex(sci_str):
     coeff, exp = sci_str.lower().split('e')
@@ -546,7 +598,7 @@ def sanitize_prediction(y_pred, *, imag_tol=1e-8, return_mask=False):
 
     return y_clean, invalid_mask
 
-def fit_template_to_data(template, s_data, y_data, *, sigma=None):
+def fit_template_to_data(template, s_data, y_data, *, sigma=None, timeout_seconds=None):
     """
     Fast/stable-ish local template fit.
 
@@ -571,6 +623,52 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None):
         sig = None
 
     f = sp.lambdify((s_sym, *param_syms), expr_param, "numpy")
+    
+    # Analytic Jacobian wrt fitted parameters
+    jac_exprs = [sp.diff(expr_param, a) for a in param_syms]
+    jac_func = sp.lambdify((s_sym, *param_syms), jac_exprs, "numpy")
+    
+    deadline = None if timeout_seconds is None else time.perf_counter() + timeout_seconds
+
+    def check_timeout():
+        if deadline is not None and time.perf_counter() > deadline:
+            raise TimeoutError("template fit timed out")
+
+    def jacobian(p):
+        check_timeout()
+        with np.errstate(all="ignore"):
+            cols = jac_func(s_data, *p)
+
+        J_cols = []
+
+        for c in cols:
+            c = np.asarray(c, dtype=float)
+
+            if c.shape == ():
+                c = np.full_like(y_data, float(c), dtype=float)
+            else:
+                c = c.ravel()
+
+            # Bad shape: use neutral finite-ish column, not all-zero whole matrix
+            if c.shape != y_data.shape:
+                c = np.zeros_like(y_data, dtype=float)
+
+            # Replace nan/inf column entries locally
+            c = np.nan_to_num(c, nan=0.0, posinf=1e6, neginf=-1e6)
+
+            # Clip insane derivative spikes
+            c = np.clip(c, -1e6, 1e6)
+
+            J_cols.append(c)
+
+        J = np.vstack(J_cols).T
+
+        if sig is not None:
+            J = J / sig[:, None]
+            J = np.nan_to_num(J, nan=0.0, posinf=1e6, neginf=-1e6)
+            J = np.clip(J, -1e6, 1e6)
+
+        return J
 
     def better(a_metrics, b_metrics):
         if b_metrics is None:
@@ -580,6 +678,7 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None):
         return a_metrics["R2"] > b_metrics["R2"]
 
     def evaluate_params(p):
+        check_timeout()
         with np.errstate(all="ignore"):
             y_pred = f(s_data, *p)
 
@@ -612,6 +711,7 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None):
     ub = p0 + width * scale
 
     def residuals(p):
+        check_timeout()
         with np.errstate(all="ignore"):
             y_pred = f(s_data, *p)
 
@@ -635,21 +735,27 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None):
     seed_result = evaluate_params(p0)
     if seed_result is not None:
         best_result = seed_result
-
+    timed_out = False
     try:
+#        check_timeout()
         res = least_squares(
             residuals,
             p0,
+            jac=jacobian if USE_ANALYTIC_JAC else '2-point',
 #            bounds=(lb, ub),
             loss="soft_l1",
 #            x_scale=scale,
             method="trf",
-            max_nfev=4000,
+            max_nfev=MAX_TEMPLATE_NFEV,
         )
+#        check_timeout()
         ls_result = evaluate_params(res.x)
         if ls_result is not None:
             if (best_result is None) or better(ls_result[0], best_result[0]):
                 best_result = ls_result
+    except TimeoutError:
+        print("TimeoutError, proceeding to next template...")
+        timed_out = True
     except Exception:
         pass
 
@@ -664,9 +770,9 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None):
         metrics = regression_metrics(y_data, y_pred, sigma=sig, ddof=len(p0) * USE_K)
         subs_dict = {sym: val for sym, val in zip(param_syms, p0)}
         expr_fitted = expr_param.subs(subs_dict)
-        return metrics, np.asarray(p0, dtype=float), expr_fitted, y_pred
+        return metrics, np.asarray(p0, dtype=float), expr_fitted, y_pred, timed_out
 
-    return best_result
+    return best_result+(timed_out,)
 
 def summarize_families(coord_name, templates, families, r2_list):
     """
@@ -693,7 +799,7 @@ def summarize_families(coord_name, templates, families, r2_list):
 
     # ---- LaTeX table ----
     lines = []
-    lines.append(r"\begin{table}")
+    lines.append(r"\begin{table}[H]")
     lines.append(r"\centering")
     lines.append(r"\begin{tabular}{c c c}")
     lines.append(r"\hline")
@@ -767,7 +873,7 @@ def summarize_3d_families(families_x, families_y, families_z, r2_x_all, r2_y_all
 
     # -------- LaTeX table --------
     lines = []
-    lines.append(r"\begin{table}")
+    lines.append(r"\begin{table}[H]")
     lines.append(r"\centering")
     lines.append(r"\begin{tabular}{c c c c c c c c}")
     lines.append(r"\hline")
@@ -818,6 +924,10 @@ if __name__ == '__main__':
         return out
     np.sech = safe_sech
 #    np.sech = lambda x: 1/np.cosh(x)
+    TEMPLATE_FIT_TIMEOUT_SECONDS = 60.0
+    MAX_TEMPLATE_NFEV = None
+    PROFILE_TEMPLATE_FITS = True
+    fit_time_records = []
     OPEN_PNGS = False
     OPEN_HTML = True
     create_dataset_only = False
@@ -825,37 +935,57 @@ if __name__ == '__main__':
     TEMPLATE_PATH = "track_templates.pkl"
     SYNC_TEMPLATES = False
     printTemplatesOnly = False
-    templates_to_delete = {}#{"x_templates": {57}, "y_templates": {57}, "z_templates": {57}}
-    ADD_FUNC_TO_TEMPLATES = create_dataset_only and False
+    templates_to_delete = {}#{"x_templates": {}, "y_templates": {48}, "z_templates": {}}
+    ADD_FUNC_TO_TEMPLATES = create_dataset_only and True
     R2_THRESHOLD = 0.997
     CHI2_THRESHOLD = 1.0
-    RunPySR = True   # Whether to enable (True) or disable (False) PySR discovery
+    RunPySR = False   # Whether to enable (True) or disable (False) PySR discovery
     MaxPySRIters = 100
-    num_tracks = 10
+    num_tracks = 100
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
     
-    track_dataset_idx = 6
+    track_dataset_idx = 10
     out_html = [
-        "v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html",
-        "v1_noiseless_69000.html",
-        "v20260202_142140__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html",
-        "v20260305_002410__train5_test5__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html",
-        "v20260407_091434__train5_test5__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html",
-        "v20260430_092453__train5_test5__layers25_len320p0__r3p1-53p0__fd5-5__func3-3__noiseXY0p01_Z0p01.html",
-        "v20260430_193549__train5_test5__layers25_len320p0__r3p1-53p0__fd5-5__func3-3__noiseXY0p01_Z0p01__randomNoise.html"
+        #legacy
+        #------
+        "v20260122_163839__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html", #old
+        "v1_noiseless_69000.html", #old
+        "v20260202_142140__train10_test10__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html", #old
+        #10 tracks
+        #---------
+        "v20260305_002410__train5_test5__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html", #25-mode 10 tracks
+        "v20260407_091434__train5_test5__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html", #helix 10-tracks
+        "v20260430_092453__train5_test5__layers25_len320p0__r3p1-53p0__fd5-5__func3-3__noiseXY0p01_Z0p01.html", #5-mode 10 tracks
+        "v20260430_193549__train5_test5__layers25_len320p0__r3p1-53p0__fd5-5__func3-3__noiseXY0p01_Z0p01__randomNoise.html", #random-noise 10 tracks
+        #100 tracks
+        #----------
+        "v20260518_131139__train50_test50__layers25_len320p0__r3p1-53p0__fd5-5__func3-3__noiseXY0p01_Z0p01.html", #5-mode 100 tracks
+        "v20260518_142036__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html", #25-mode 100 tracks
+        "v20260518_142850__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html", #helix 100 tracks
+        "v20260519_110640__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__randomNoise.html" #random-noise 100 tracks
     ]
     track_folder = [f"../tracks_for_ed/{i[:-5]}" for i in out_html]
     dataset_labels = [
+        #legacy
+        #------
         "v20260122_163839 train/test (noise XY=0.01, Z=0.01) Fourier-Dim = 25",
         "v1_noiseless_69000 (no sigma columns)",
         "v20260202_142140 train/test (noise XY=0.01, Z=0.01) Standard Model",
+        #10 tracks
+        #---------
         "v20260305_002410 train/test (noise XY=0.01, Z=0.01) Fourier-Dim = 25",
         "v20260407_091434 train/test (noise XY=0.01, Z=0.01) Standard Model",
         "v20260430_092453 train/test (noise XY=0.01, Z=0.01) Fourier-Dim = 5",
-        "v20260430_193549 train/test (noise XY=0.01, Z=0.01) Random Noise"
+        "v20260430_193549 train/test (noise XY=0.01, Z=0.01) Random Noise",
+        #100 tracks
+        #----------
+        "v20260518_131139 train/test (noise XY=0.01, Z=0.01) Fourier-Dim = 5",
+        "v20260518_142036 train/test (noise XY=0.01, Z=0.01) Fourier-Dim = 25",
+        "v20260518_142850 train/test (noise XY=0.01, Z=0.01) Standard Model",
+        "v20260519_110640 train/test (noise XY=0.01, Z=0.01) Random Noise"
     ]
-    print(out_html, track_folder, dataset_labels, sep='\n');
+#    print(out_html, track_folder, dataset_labels, sep='\n');
     track_folder = track_folder[track_dataset_idx]
     dataset_label = dataset_labels[track_dataset_idx]
     out_html = out_html[track_dataset_idx]
@@ -893,10 +1023,21 @@ if __name__ == '__main__':
                 for i, t in enumerate(templates):
                     expr = t.get("expr", None)
                     nparams = len(t.get("param_syms", []))
-                    expr_s = sp.sstr(expr) if expr is not None else "<no expr>"
+
+                    if expr is not None:
+                        expr_s = sp.sstr(expr)
+                        temp = sp.symbols(f"f_{i}")
+                        expr_latex = sp.multiline_latex(temp, expr, 2)
+                    else:
+                        expr_s = "<no expr>"
+                        expr_latex = "<no expr>"
+
                     num_chars = 1500
                     expr_s = (expr_s[:num_chars] + "...") if len(expr_s) > num_chars else expr_s
-                    print(f"[{i:3d}] nparams ={nparams:2d}:  {expr_s}")
+                    
+                    print(f"[{i:3d}] nparams = {nparams:2d}:  {expr_s}")
+                    print(f"      latex:\n{expr_latex}")
+                    print()
 
             if templates_to_delete:
                 # ---- delete selected indices + write back ----
@@ -953,6 +1094,9 @@ if __name__ == '__main__':
     families_x, families_y, families_z = [], [], []  # indices of template used
     r2_x_all, r2_y_all, r2_z_all = [], [], [] # R^2 values for each track and coordinate
     chi2_x_all, chi2_y_all, chi2_z_all = [], [], []
+    chi2_sr_track_all = []
+    chi2_helix_track_all = []
+    log_chi2_ratio_all = []
 
     # now load sigma arrays too
     S, X, Y, Z, SIG_X_LIST, SIG_Y_LIST, SIG_Z_LIST, F = load_many_tracks(track_folder, offset = 0, max_tracks=num_tracks, param = independent_param)
@@ -974,19 +1118,35 @@ if __name__ == '__main__':
             return None
 
         template = make_parametric_template(plot_func, s_name=s_name)
-        metrics, p_opt, expr_fitted, y_pred = fit_template_to_data(
+        metrics, p_opt, expr_fitted, y_pred, _ = fit_template_to_data(
             template, s_data, y_true, sigma=sigma
         )
         
-        if not ADD_FUNC_TO_TEMPLATES and not use_best_template:
-            return {"template": template, "metrics": metrics, "p_opt": p_opt, "expr_fitted": expr_fitted, "y_pred": y_pred}
-
         if coord == "x":
             coord_templates = x_templates
         elif coord == "y":
             coord_templates = y_templates
         else:
             coord_templates = z_templates
+        
+        if not use_best_template:
+            if ADD_FUNC_TO_TEMPLATES:
+                new_sig = template_signature(template)
+                already = any(template_signature(t) == new_sig for t in coord_templates)
+                if not already:
+                    coord_templates.append(template)
+                    save_obj = {
+                        "x_templates": x_templates,
+                        "y_templates": y_templates,
+                        "z_templates": z_templates,
+                    }
+                    with open(TEMPLATE_PATH, "wb") as f:
+                        pickle.dump(save_obj, f)
+
+                    print(f"[ADD_FUNC_TO_TEMPLATES] Added fitted {coord}(s) template and saved to {TEMPLATE_PATH}.")
+                else:
+                    print(f"[ADD_FUNC_TO_TEMPLATES] Fitted {coord}(s) template already exists; not adding.")
+            return {"template": template, "metrics": metrics, "p_opt": p_opt, "expr_fitted": expr_fitted, "y_pred": y_pred}
 
         CHI2_RED_TARGET = 1.0
 
@@ -1006,7 +1166,7 @@ if __name__ == '__main__':
 
         for t_old in coord_templates:
             try:
-                m_old, _, expr_old, y_old = fit_template_to_data(
+                m_old, _, expr_old, y_old, _ = fit_template_to_data(
                     t_old, s_data, y_true, sigma=sigma
                 )
             except Exception:
@@ -1017,7 +1177,7 @@ if __name__ == '__main__':
                 best_expr = expr_old
                 best_pred = y_old
 
-        if use_best_template:
+        if use_best_template and not ADD_FUNC_TO_TEMPLATES:
             return {
                 "template": best_template,
                 "metrics": best_old,
@@ -1026,7 +1186,7 @@ if __name__ == '__main__':
                 "y_pred": best_pred,
             }
             
-        if ADD_FUNC_TO_TEMPLATES:
+        else: #ADD_FUNC_TO_TEMPLATES and use_best_template
             is_best = better(metrics, best_old)
 
             if is_best:
@@ -1167,7 +1327,7 @@ if __name__ == '__main__':
 
                 if result is None:
                     template = make_parametric_template(plot_func, s_name=s_name)
-                    metrics, p_opt, expr_fitted, y_pred = fit_template_to_data(
+                    metrics, p_opt, expr_fitted, y_pred, _ = fit_template_to_data(
                         template, s_data, y_true, sigma=sigma
                     )
                 else:
@@ -1307,11 +1467,10 @@ if __name__ == '__main__':
 
         exit()
 
-    
     if create_dataset_only:
         base_path = "../stubborn_track_csvs"
         track_number = 10
-        track_coord = 'Z'
+        track_coord = 'Y'
         track_dict = {'X': X, 'Y': Y, 'Z': Z}
         track_sig_dict = {'X': SIG_X_LIST, 'Y': SIG_Y_LIST, 'Z': SIG_Z_LIST}
         assert(track_number <= num_tracks)
@@ -1320,7 +1479,7 @@ if __name__ == '__main__':
         s = sp.Symbol("s")
         print(len(S))
         fitPlotFunc = True
-        use_best_template = not ADD_FUNC_TO_TEMPLATES and True
+        use_best_template = not ADD_FUNC_TO_TEMPLATES and fitPlotFunc and False
         np.asin = np.arcsin; np.acos = np.arccos;
         eps = .02
         w = 0.28
@@ -1339,14 +1498,20 @@ if __name__ == '__main__':
              
             -5.50466591089477*s*(1.70039722527395 - s)*(-s - 0.0162295845807038)*(4.00737733483285*s - 4.00940995245073)*((sp.sech(3.27367950400572*s - 1.48312792190553)) - 0.754090581680331)*sp.asin(sp.cos((-4*s - 37.4920191217381)*(s + sp.tanh(s) + 4.00002891030393))) + 535.769518012801*s*(-10.0376306641134*sp.sqrt(s) - 7.81415301248505*s + 7.23578184327598*sp.tanh(2*s) + sp.tanh(31.195486795312*s) + 4) - s*sp.acos(sp.sin(15.5503305424751*s - 0.970964358141088))*sp.asin(sp.sin(s + 0.516916539837922) - 0.924353328910169)*sp.asin(sp.cos(126.9028116316*s - 1.6331153880208)) + 0.120548878924122*s*sp.asin(sp.cos(1.01538655627536*s*(4.00006692964641*s + 102.332482578604) + 1.17325346410979)) - 1082.65217074294*s*(sp.sech(s)) + (0.0534168631709986 - 0.0693124972816619*(sp.sech(sp.sin(108.320167745834*s + 0.615056646341812))))*(-s + sp.cos(s) + 0.0756661568410857) - 46.2653787678379*(0.644755504616641 - sp.sin(11.8173417825201*s))*(s - 0.687742250304036)*sp.acos(s) - 0.0244265790108815*(s + 0.538161191921888)*sp.sin((2.00001210737461*s + 5.0169336236088)*(21.8952678654529*s + 34.3728366428198)) - (4.00089311512484*s + 4.23937111593429)*(-sp.sin(s) + sp.asin(s))*(-1613.50233696944*sp.acos(s) - 1167.10664756326)*sp.cos(sp.sqrt(s)) + (s + (sp.sech(s)) + 4.58473418203009)*sp.sin(s**(1/4) - (sp.sech((2.29735129775006*sp.sqrt(s) - 1.15890988945187)*sp.asin(2*s - 1) + 0.65074441378254)))*sp.asin(sp.sin(6.49311574476857*s**(1/4) - 0.588391476120246)) - 1.45293163608378*sp.sin(s*(43.5991491705392 - 2.06239251465106*s)) - sp.tanh((-0.016393191610065*s - 0.02275708788162)*sp.sin((6.21191148457236*s - 31.2105996780386)*(8.99995080796468*s + 0.892110946959537))) + sp.sqrt(sp.acos(s)) + sp.asin(s) + 0.0120441963998886*sp.asin(sp.cos(s*(4.18629445523148*s*(s + 11.3960056045401) - 80.788176988262*s - 327.098464614774))) - 0.573225484901637*sp.asin(sp.cos(1.44846490298103*sp.cos(3.94581257526148*s) + 168.663012300412*(sp.sech(s)) - 1.38846029999576)) - 71.2112238107356*sp.asin((sp.sech(4*s - 0.596904625008991))) + 0.36956098143931*sp.asin((sp.sech(sp.asin(sp.cos(6.09468986977017*s + 4.00119945258325*sp.cos(15.982571718891*s) + 0.391750902006813))))) + 0.808105974831905*(sp.sech(sp.tanh(6.25564309412623*s)*sp.tanh(sp.tanh(sp.sqrt(sp.acos(-sp.sin(9.5911944201174*sp.sqrt(s)*(s + sp.cos(sp.sqrt((sp.sech(s)))) + 1.44047618858378) + 153.461616832355*s + 5.23019493782362))) - 0.864866279863255)))) - (sp.sech(0.472210848832586*sp.tanh((s - 0.620172924169831)*sp.asin(s) + sp.cos(144.079890357557*s) + 0.957252169757047) - 0.597752470427521)) + 52.2397231623041*(sp.sech(sp.cos(10.9149195017235*s - 0.268388476005615))) - 0.122858811898602 if fitPlotFunc else lambda s: -5.50466591089477*s*(1.70039722527395 - s)*(-s - 0.0162295845807038)*(4.00737733483285*s - 4.00940995245073)*((np.sech(3.27367950400572*s - 1.48312792190553)) - 0.754090581680331)*np.asin(np.cos((-4*s - 37.4920191217381)*(s + np.tanh(s) + 4.00002891030393))) + 535.769518012801*s*(-10.0376306641134*np.sqrt(s) - 7.81415301248505*s + 7.23578184327598*np.tanh(2*s) + np.tanh(31.195486795312*s) + 4) - s*np.acos(np.sin(15.5503305424751*s - 0.970964358141088))*np.asin(np.sin(s + 0.516916539837922) - 0.924353328910169)*np.asin(np.cos(126.9028116316*s - 1.6331153880208)) + 0.120548878924122*s*np.asin(np.cos(1.01538655627536*s*(4.00006692964641*s + 102.332482578604) + 1.17325346410979)) - 1082.65217074294*s*(np.sech(s)) + (0.0534168631709986 - 0.0693124972816619*(np.sech(np.sin(108.320167745834*s + 0.615056646341812))))*(-s + np.cos(s) + 0.0756661568410857) - 46.2653787678379*(0.644755504616641 - np.sin(11.8173417825201*s))*(s - 0.687742250304036)*np.acos(s) - 0.0244265790108815*(s + 0.538161191921888)*np.sin((2.00001210737461*s + 5.0169336236088)*(21.8952678654529*s + 34.3728366428198)) - (4.00089311512484*s + 4.23937111593429)*(-np.sin(s) + np.asin(s))*(-1613.50233696944*np.acos(s) - 1167.10664756326)*np.cos(np.sqrt(s)) + (s + (np.sech(s)) + 4.58473418203009)*np.sin(s**(1/4) - (np.sech((2.29735129775006*np.sqrt(s) - 1.15890988945187)*np.asin(2*s - 1) + 0.65074441378254)))*np.asin(np.sin(6.49311574476857*s**(1/4) - 0.588391476120246)) - 1.45293163608378*np.sin(s*(43.5991491705392 - 2.06239251465106*s)) - np.tanh((-0.016393191610065*s - 0.02275708788162)*np.sin((6.21191148457236*s - 31.2105996780386)*(8.99995080796468*s + 0.892110946959537))) + np.sqrt(np.acos(s)) + np.asin(s) + 0.0120441963998886*np.asin(np.cos(s*(4.18629445523148*s*(s + 11.3960056045401) - 80.788176988262*s - 327.098464614774))) - 0.573225484901637*np.asin(np.cos(1.44846490298103*np.cos(3.94581257526148*s) + 168.663012300412*(np.sech(s)) - 1.38846029999576)) - 71.2112238107356*np.asin((np.sech(4*s - 0.596904625008991))) + 0.36956098143931*np.asin((np.sech(np.asin(np.cos(6.09468986977017*s + 4.00119945258325*np.cos(15.982571718891*s) + 0.391750902006813))))) + 0.808105974831905*(np.sech(np.tanh(6.25564309412623*s)*np.tanh(np.tanh(np.sqrt(np.acos(-np.sin(9.5911944201174*np.sqrt(s)*(s + np.cos(np.sqrt((np.sech(s)))) + 1.44047618858378) + 153.461616832355*s + 5.23019493782362))) - 0.864866279863255)))) - (np.sech(0.472210848832586*np.tanh((s - 0.620172924169831)*np.asin(s) + np.cos(144.079890357557*s) + 0.957252169757047) - 0.597752470427521)) + 52.2397231623041*(np.sech(np.cos(10.9149195017235*s - 0.268388476005615))) - 0.122858811898602,
             
-            -35.0558652089601*sp.sqrt(s)*(891.056148009534*s + 2.53597147879029) + 376.851998521786*s*(64.1834989628938*s - 128.366997925788)*(9.09313893210039*s + sp.sqrt(1 - s**2)*(3.61700086504996 - 3.30850036923995*s) - 0.0833907830188576*sp.sqrt(sp.acos(s)) - 1.28584763655547*sp.acos(0.964027591058245 - s) + 0.766321406608278) + 0.0167100452331244*s - (0.0743519071130465 - 0.145204815435371*s)*sp.sin(sp.cos(19.8767778344619*s**(1/4) + 19.8767778344619*(s + 1.68372065612779)*(2*s - 0.986402100236707)) + 3.52254959822515) - (0.143636102494861 - 0.0554328823103544*s)*(sp.sech(s - sp.acos(-sp.sin(57.4432199420678*s)) + 2.52147192195438)) + 94.2129996304466*(4*s + 8.02257957652694)*(-2.16616169835041*(-(sp.sech(s**2)) - 117.106652697614)*sp.tanh(s) - 0.295897531468393) - 2.02697134797746*sp.cos(36.6324327032647*s) + 1.78556980848733*sp.cos(36.8021245485409*s) - 0.0167100452331244*sp.cos((25.2201242088053*s + 4.04517243378088)*((sp.acos(s)*sp.asin(s))**(1/4)*(sp.cos(s) + 3.87668380943271) - sp.tanh(3.81820829624094*sp.sin(s) - 3.81820829624094*sp.cos(s)))) + 132.699139925062*sp.cos(sp.tanh(7.93286060696121*s)) + 94.2129996304466*(sp.sech(6.22002576523419*s)) if fitPlotFunc else lambda s: -35.0558652089601*np.sqrt(s)*(891.056148009534*s + 2.53597147879029) + 376.851998521786*s*(64.1834989628938*s - 128.366997925788)*(9.09313893210039*s + np.sqrt(1 - s**2)*(3.61700086504996 - 3.30850036923995*s) - 0.0833907830188576*np.sqrt(np.acos(s)) - 1.28584763655547*np.acos(0.964027591058245 - s) + 0.766321406608278) + 0.0167100452331244*s - (0.0743519071130465 - 0.145204815435371*s)*np.sin(np.cos(19.8767778344619*s**(1/4) + 19.8767778344619*(s + 1.68372065612779)*(2*s - 0.986402100236707)) + 3.52254959822515) - (0.143636102494861 - 0.0554328823103544*s)*(np.sech(s - np.acos(-np.sin(57.4432199420678*s)) + 2.52147192195438)) + 94.2129996304466*(4*s + 8.02257957652694)*(-2.16616169835041*(-(np.sech(s**2)) - 117.106652697614)*np.tanh(s) - 0.295897531468393) - 2.02697134797746*np.cos(36.6324327032647*s) + 1.78556980848733*np.cos(36.8021245485409*s) - 0.0167100452331244*np.cos((25.2201242088053*s + 4.04517243378088)*((np.acos(s)*np.asin(s))**(1/4)*(np.cos(s) + 3.87668380943271) - np.tanh(3.81820829624094*np.sin(s) - 3.81820829624094*np.cos(s)))) + 132.699139925062*np.cos(np.tanh(7.93286060696121*s)) + 94.2129996304466*(np.sech(6.22002576523419*s))
-            ][7]
+            s*(0.35150781758261*sp.sqrt(s) - 0.333022668363657)*sp.acos(sp.sin(32.1166320164705*s*(9.19158507209455 - s) - 8.45957591348003*s*sp.tanh(s))) - 14.0340533521493*s*(s - 0.925699599074167)*(-s**2*(s - 0.68188345550182) + (0.277177761498368*sp.sqrt(s) - 0.302281374392383)*sp.cos(19.9441815266446*s) + 0.0632712160938019)*sp.sin(119.996074439374*s) - 104.665594294738*s - (0.357890113728756 - 0.274733875426675*s)*sp.acos(sp.sin(82.5066423611442*sp.sin(sp.tanh(s)) - 82.5066423611442*(sp.sech(sp.tanh(s**2))))) + 1.26784910512935*(0.395146699292125 - sp.tanh(s))*(-sp.sqrt(s) + s)*sp.cos(45.9732485568946*s*(3.99880791029571*sp.sin((sp.sech(s))) + 3.90749958641011)*sp.acos(s)) + 8.79402539438848*(s - 0.51851259727494)*((sp.sqrt(s) - 1.46763525233424*s)*(s - 0.998162283379347) - 0.0447296984653373)*sp.tanh(s)*sp.acos(-sp.sin(1902.46595265885*(sp.asin(s) + 0.964041983332935)*sp.acos(s) - 1.67352400333351)) - (0.0920961138884418*s**2*sp.acos(s) - 0.0274599220257915)*sp.asin(sp.cos((-8.01707746958785*s - 205.316156236639)*sp.acos(sp.sqrt(s)) + 0.572779563351826)) + ((4*s - 16)*(6.49197695384928*sp.sqrt(s) - 6.49197695384928*s + (-16.7772473592904*s - 0.852119915053612)*(-s**(1/8) - 21.498454836839*s*(1.0207597001876 - sp.cos(s))*sp.acos(sp.sin(s + 1.14159572735604)) - 102.02611009012*s*(sp.sech(sp.asin(s))) - (sp.sqrt(s) - 0.626253963060657)*(36.4611715859424*s - 0.567167034283649*sp.sin(11.3312156254221*s) - 20.6414149510624) + 4.0023149582201*(4.1994732677798*sp.sqrt(s) + 27.4053543107184)*sp.sin(s) - 38.3775294968102*sp.asin(s) + 7.88769901827848)) + 1.45937941058617*sp.sin(42.9332646307719*s) - 1.04315625405939*sp.cos(36.8415716113311*s) + 19.9551637646996*sp.tanh(sp.cos(13.3686277119328*s)))*sp.acos(s) - sp.sin(2.18520921347537*(2*s - 0.0833773959037761)*sp.sqrt(sp.acos((sp.sech(0.964689908384644*s - 0.119900265114101))))) - 0.0110555438117794*sp.cos(256*(8*s + 8.06364601349146)*sp.tanh(0.995240878020338*s))*sp.acos(s) - sp.cos(3.23816704886964*(67.7942931788714*s + 16.2190305438427)*(sp.sech(1.65630870879099*sp.sin(s))))*sp.asin((sp.sech(s*(8.45730630652127*s - 6.37951520253959) + 0.919820999472334)) - 0.796331718883393) - sp.tanh(s) + 134.990230755421*sp.acos((sp.sech(sp.asin(s) - 0.674646509870788))) + sp.asin(s) + 0.610187719110096 if fitPlotFunc else lambda s: s*(0.35150781758261*np.sqrt(s) - 0.333022668363657)*np.acos(np.sin(32.1166320164705*s*(9.19158507209455 - s) - 8.45957591348003*s*np.tanh(s))) - 14.0340533521493*s*(s - 0.925699599074167)*(-s**2*(s - 0.68188345550182) + (0.277177761498368*np.sqrt(s) - 0.302281374392383)*np.cos(19.9441815266446*s) + 0.0632712160938019)*np.sin(119.996074439374*s) - 104.665594294738*s - (0.357890113728756 - 0.274733875426675*s)*np.acos(np.sin(82.5066423611442*np.sin(np.tanh(s)) - 82.5066423611442*(np.sech(np.tanh(s**2))))) + 1.26784910512935*(0.395146699292125 - np.tanh(s))*(-np.sqrt(s) + s)*np.cos(45.9732485568946*s*(3.99880791029571*np.sin((np.sech(s))) + 3.90749958641011)*np.acos(s)) + 8.79402539438848*(s - 0.51851259727494)*((np.sqrt(s) - 1.46763525233424*s)*(s - 0.998162283379347) - 0.0447296984653373)*np.tanh(s)*np.acos(-np.sin(1902.46595265885*(np.asin(s) + 0.964041983332935)*np.acos(s) - 1.67352400333351)) - (0.0920961138884418*s**2*np.acos(s) - 0.0274599220257915)*np.asin(np.cos((-8.01707746958785*s - 205.316156236639)*np.acos(np.sqrt(s)) + 0.572779563351826)) + ((4*s - 16)*(6.49197695384928*np.sqrt(s) - 6.49197695384928*s + (-16.7772473592904*s - 0.852119915053612)*(-s**(1/8) - 21.498454836839*s*(1.0207597001876 - np.cos(s))*np.acos(np.sin(s + 1.14159572735604)) - 102.02611009012*s*(np.sech(np.asin(s))) - (np.sqrt(s) - 0.626253963060657)*(36.4611715859424*s - 0.567167034283649*np.sin(11.3312156254221*s) - 20.6414149510624) + 4.0023149582201*(4.1994732677798*np.sqrt(s) + 27.4053543107184)*np.sin(s) - 38.3775294968102*np.asin(s) + 7.88769901827848)) + 1.45937941058617*np.sin(42.9332646307719*s) - 1.04315625405939*np.cos(36.8415716113311*s) + 19.9551637646996*np.tanh(np.cos(13.3686277119328*s)))*np.acos(s) - np.sin(2.18520921347537*(2*s - 0.0833773959037761)*np.sqrt(np.acos((np.sech(0.964689908384644*s - 0.119900265114101))))) - 0.0110555438117794*np.cos(256*(8*s + 8.06364601349146)*np.tanh(0.995240878020338*s))*np.acos(s) - np.cos(3.23816704886964*(67.7942931788714*s + 16.2190305438427)*(np.sech(1.65630870879099*np.sin(s))))*np.asin((np.sech(s*(8.45730630652127*s - 6.37951520253959) + 0.919820999472334)) - 0.796331718883393) - np.tanh(s) + 134.990230755421*np.acos((np.sech(np.asin(s) - 0.674646509870788))) + np.asin(s) + 0.610187719110096,
+            
+            s**4*(s - sp.sin((sp.sech(sp.asin(sp.cos(43.7658970085622*s)))))) + ((2.4331153884274*s + 9.73246155370961)*(2.38054669230044*s*(-s + sp.asin(sp.cos(s)) + 1.11360204138382) + (0.602885407933167*s - 0.133257343608075)*(sp.sin(9.68908970669284*s) - 0.651198450696191) - (-0.261634534111174*sp.acos(sp.sin(s + 0.92267255249497)) - (sp.sech(12.2934759385643*s)))*sp.asin(s))*sp.tanh(sp.sqrt(s)) + (sp.asin(s) - 0.432674784177864)*sp.acos(s) - (12.5512707317323*sp.asin(s) + 2.3160596538541)*sp.asin((sp.sech(s - sp.acos(s)))) + sp.acos(-sp.sin(3.77812983334766*s + 0.351353675804933)))*(1.6128526571318*sp.acos(sp.sin(s)) + sp.acos(sp.acos((sp.sech(sp.cos(s) - 0.96402913805394)))) + sp.asin(s) + 0.555651552301055*(sp.sech(sp.sin(s))) + 0.181411222291904) if fitPlotFunc else lambda s: s**4*(s - np.sin((np.sech(np.asin(np.cos(43.7658970085622*s)))))) + ((2.4331153884274*s + 9.73246155370961)*(2.38054669230044*s*(-s + np.asin(np.cos(s)) + 1.11360204138382) + (0.602885407933167*s - 0.133257343608075)*(np.sin(9.68908970669284*s) - 0.651198450696191) - (-0.261634534111174*np.acos(np.sin(s + 0.92267255249497)) - (np.sech(12.2934759385643*s)))*np.asin(s))*np.tanh(np.sqrt(s)) + (np.asin(s) - 0.432674784177864)*np.acos(s) - (12.5512707317323*np.asin(s) + 2.3160596538541)*np.asin((np.sech(s - np.acos(s)))) + np.acos(-np.sin(3.77812983334766*s + 0.351353675804933)))*(1.6128526571318*np.acos(np.sin(s)) + np.acos(np.acos((np.sech(np.cos(s) - 0.96402913805394)))) + np.asin(s) + 0.555651552301055*(np.sech(np.sin(s))) + 0.181411222291904),
+            
+            1.18758088217788*s*((3.95612953340812*s - 2.79866635866973)*(4.45177443826505*s*(s - 0.83616195319365) + 1.23563167989271)*sp.sin(s*sp.acos(s)*sp.acos(s**2) - 78.8163869890209*s + sp.acos(s) - 0.655559785797509) + sp.sin(63.8496127899226*s) - 2.37746212703046*sp.asin(s))*sp.acos(s) + 252.379586312285*s - (9.66807002525517 - s)*(-s*(-849.210235213245*s*(0.510161714005191*s**2 - s + 0.563058808785346) - 153.690017450399*(sp.sech(7.94923472899486*s))) + (3.41070903296322 - 4.23205647270224*sp.sin(s))*sp.sin(14.8891761085718*s) + 24.1071423990705*sp.tanh(sp.asin((sp.sech(22.2657804460589*s)))) - 0.49290316154652*sp.acos(sp.sin(15.886179981865*s - 0.836198517169719))) + 14.0236994269271*(sp.sqrt(s) + 0.273640864998715)*(sp.sech(51.7021475766649*s - 1.80553928900183)) + (3.75461404422759*s**2 + 15.1876491310993)*sp.tanh(50.6650373487033*s)*sp.acos(-s) - sp.tanh(0.2209976698388*sp.sin((0.442658974390256 - 4.02601359193587*s)*(-6.40200669162919*s - 3.65749215257165*sp.acos(s) + 33.8537977431566))*(sp.sech(s))) - 51.5976209896284*sp.tanh(sp.sin(8.78980286053023*s)) + sp.sqrt(sp.acos(s)) + 200.214812382954 if fitPlotFunc else lambda s: 1.18758088217788*s*((3.95612953340812*s - 2.79866635866973)*(4.45177443826505*s*(s - 0.83616195319365) + 1.23563167989271)*np.sin(s*np.acos(s)*np.acos(s**2) - 78.8163869890209*s + np.acos(s) - 0.655559785797509) + np.sin(63.8496127899226*s) - 2.37746212703046*np.asin(s))*np.acos(s) + 252.379586312285*s - (9.66807002525517 - s)*(-s*(-849.210235213245*s*(0.510161714005191*s**2 - s + 0.563058808785346) - 153.690017450399*(np.sech(7.94923472899486*s))) + (3.41070903296322 - 4.23205647270224*np.sin(s))*np.sin(14.8891761085718*s) + 24.1071423990705*np.tanh(np.asin((np.sech(22.2657804460589*s)))) - 0.49290316154652*np.acos(np.sin(15.886179981865*s - 0.836198517169719))) + 14.0236994269271*(np.sqrt(s) + 0.273640864998715)*(np.sech(51.7021475766649*s - 1.80553928900183)) + (3.75461404422759*s**2 + 15.1876491310993)*np.tanh(50.6650373487033*s)*np.acos(-s) - np.tanh(0.2209976698388*np.sin((0.442658974390256 - 4.02601359193587*s)*(-6.40200669162919*s - 3.65749215257165*np.acos(s) + 33.8537977431566))*(np.sech(s))) - 51.5976209896284*np.tanh(np.sin(8.78980286053023*s)) + np.sqrt(np.acos(s)) + 200.214812382954
+            
+            ][9]
 
         plot_func_eqn = (r"$"+track_coord.lower()+r"(s)$").replace("x_{0}","s")
 #        plot_func = None
 #        plot_func_eqn = None
         print(*zip(S[track_number-1][:], track_dict[track_coord][track_number-1][:]), sep = '\n')
         print(f"number of data points = {len(S[track_number-1][:])}")
+        print(f'hasattr(plot_func, "atoms") = {hasattr(plot_func, "atoms")}')
 #        N_dat = 10000
         x_dat = S[track_number-1];# x_min = min(S[track_number-1]); x_max = max(S[track_number-1]);
 #        x_dat = np.linspace(x_min, x_max, N_dat)
@@ -1424,11 +1589,39 @@ if __name__ == '__main__':
             if templates:
                 for idx, template in enumerate(templates):
                     try:
-                        metrics, p_opt, expr_fitted, _ = fit_template_to_data(template, s_data, y_data, sigma=sigma)
+                        t0 = time.perf_counter() if PROFILE_TEMPLATE_FITS else 0
+                        metrics, p_opt, expr_fitted, timed_out = fit_template_to_data(template, s_data, y_data, sigma=sigma, timeout_seconds = TEMPLATE_FIT_TIMEOUT_SECONDS)
+                        if PROFILE_TEMPLATE_FITS:
+                            dt = time.perf_counter() - t0
+                            fit_time_records.append({
+                                "track_idx": track_idx,
+                                "coord": coord_name,
+                                "template_idx": idx,
+                                "seconds": dt,
+                                "chi2_red": metrics.get("chi2_red", np.nan),
+                                "R2": metrics.get("R2", np.nan),
+                                "timed_out": timed_out
+                            })
+                            print(f"[timing] track={track_idx} coord={coord_name} template={idx} dt={dt:.3f}s")
                         if is_weighted():
                             print(f"Template {idx} metrics chi2_red = {metrics['chi2_red']}")
                         else:
                             print(f"Template {idx} metrics R2 = {metrics['R2']}")
+                    except TimeoutError:
+                        dt = time.perf_counter() - t0
+                        print(f"[timeout] track={track_idx} coord={coord_name} "
+                              f"template={idx} exceeded {TEMPLATE_FIT_TIMEOUT_SECONDS:.1f}s")
+                        if PROFILE_TEMPLATE_FITS:
+                            fit_time_records.append({
+                                "track_idx": track_idx,
+                                "coord": coord_name,
+                                "template_idx": idx,
+                                "seconds": dt,
+                                "chi2_red": np.nan,
+                                "R2": np.nan,
+                                "timed_out": True,
+                            })
+                        continue
                     except ValueError as e:
                         # Often: "array must not contain infs or NaNs" from pathological templates
                         print(f"[Track {track_idx} {coord_name}] Skipping template {idx} due to ValueError: {e}")
@@ -1609,8 +1802,15 @@ if __name__ == '__main__':
 
         sm_x = sm_y = sm_z = None
         chi2nu_sm = None
+        chi2nu_helix = None
+        
+        chi2_sr = m_x["chi2"] + m_y["chi2"] + m_z["chi2"]
 
-        if is_standard_model_dataset:
+        # crude but consistent; optionally subtract parameter count later
+        dof_sr = max(3 * len(s_all) - 1, 1)
+        chi2nu_sr = chi2_sr / dof_sr
+
+        if True:
             # --- 1) fit circle in x–y to get helix center ---
             xc0, yc0 = np.mean(x_all), np.mean(y_all)
             R0 = np.median(np.sqrt((x_all - xc0)**2 + (y_all - yc0)**2))
@@ -1661,6 +1861,16 @@ if __name__ == '__main__':
             }
             
             chi2nu_sm = sm_metrics["chi2_red"]
+            
+            chi2nu_helix = chi2nu_sm
+            log_chi2_ratio = np.log((chi2nu_sr + 1e-300) / (chi2nu_helix + 1e-300))
+
+            chi2_sr_track_all.append(chi2nu_sr)
+            chi2_helix_track_all.append(chi2nu_helix)
+            log_chi2_ratio_all.append(log_chi2_ratio)
+
+            print(f"[Ratio] chi2nu_SR={chi2nu_sr:.3e}, chi2nu_helix={chi2nu_helix:.3e}, "
+                  f"log(SR/helix)={log_chi2_ratio:.3f}")
 
             print(f"[SM Fit] xc={xc_fit:.2f}, yc={yc_fit:.2f}, R={R_fit:.2f}")
             print(f"[SM Fit] chi2_red={chi2_red:.3e}, res_std={np.std(res_xyz):.3e}")
@@ -1712,6 +1922,12 @@ if __name__ == '__main__':
         z_pred = fz(s_plot)
 
         fig, axes = plt.subplots(3, 1, figsize=(9, 10), sharex=True)
+        fig.suptitle(
+            fr"$\chi^2_{{\nu,\mathrm{{SR}}}}={chi2nu_sr:.3e}$, "
+            fr"$\chi^2_{{\nu,\mathrm{{helix}}}}={chi2nu_helix:.3e}$, "
+            fr"$\log(\chi^2_{{\nu,\mathrm{{SR}}}}/\chi^2_{{\nu,\mathrm{{helix}}}})={log_chi2_ratio:.3f}$",
+            fontsize=11
+        )
         MAX_EQ_CHARS = 80  # tune
         # x(s)
         label_x = (fr"Fit: $R^2={m_x['R2']:.3f}$, "
@@ -1761,7 +1977,7 @@ if __name__ == '__main__':
         axes[2].set_xlabel(r"reconstructed helix phase $\phi$" if independent_param == "phi" else "normalized arc length")
         axes[2].legend(fontsize=8)
 
-        plt.tight_layout()
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
         img_str = f"../pngs/SR_track_{outfile_str}{f_all}.png"
         plt.savefig(img_str, dpi=5*96)
         system(f"open {img_str}") if OPEN_PNGS else None
@@ -1777,6 +1993,9 @@ if __name__ == '__main__':
             "Fz": families_z[-1],
             "mx": m_x, "my": m_y, "mz": m_z,
             "eqx": eq_x, "eqy": eq_y, "eqz": eq_z,
+            "chi2nu_sr": chi2nu_sr,
+            "chi2nu_helix": chi2nu_helix,
+            "log_chi2_ratio": log_chi2_ratio,
         })
 
 
@@ -1812,6 +2031,27 @@ if __name__ == '__main__':
         return "\n".join(lines)
 
     print("\n"*10)
+    
+    if PROFILE_TEMPLATE_FITS and fit_time_records:
+        timing_df = pd.DataFrame(fit_time_records)
+
+        timing_csv = f"../data_files/template_fit_times_{outfile_str}.csv"
+        timing_df.to_csv(timing_csv, index=False)
+
+        worst = timing_df.loc[timing_df["seconds"].idxmax()]
+        print("\n=== Template refit timing summary ===")
+        print(f"Saved timing data to {timing_csv}")
+        print(
+            "Worst single component/template refit: "
+            f"track={int(worst['track_idx'])}, "
+            f"coord={worst['coord']}, "
+            f"template={int(worst['template_idx'])}, "
+            f"time={worst['seconds']:.3f} s, "
+            f"chi2_red={worst['chi2_red']:.3e}"
+        )
+
+        print("\nSlowest 10 refits:")
+        print(timing_df.sort_values("seconds", ascending=False).head(10).to_string(index=False))
 
     weighted_flag = (SIG_X_LIST[0] is not None)
     latex_3d_table, triple_id_map = summarize_3d_families(
@@ -1838,6 +2078,36 @@ if __name__ == '__main__':
     with open(TEMPLATE_PATH, "wb") as f:
         pickle.dump(save_obj, f)
 
+    ratio_hist_png = f"../pngs/chi2_ratio_hist_{outfile_str}.png"
+
+    vals = np.asarray(log_chi2_ratio_all, dtype=float)
+    vals = vals[np.isfinite(vals)]
+
+    plt.figure(figsize=(7, 4))
+    plt.hist(vals, bins=min(10, max(3, len(vals))))
+    plt.axvline(0.0, linestyle="--", linewidth=1)
+    plt.xlabel(r"$\log(\chi^2_{\nu,\mathrm{SR}} / \chi^2_{\nu,\mathrm{helix}})$")
+    plt.ylabel("Tracks")
+    plt.title("SR vs helix goodness-of-fit ratio")
+    plt.tight_layout()
+    plt.savefig(ratio_hist_png, dpi=5*96)
+    plt.close()
+
+    system(f"cp {ratio_hist_png} /Users/edwardfinkelstein/AIFeynmanExpressionTrees/Whiteson/pngs/")
+    
+    ratio_txt = f"../data_files/chi2_ratio_values_{outfile_str}.csv"
+
+    np.savetxt(ratio_txt,
+        np.column_stack([
+            np.asarray(log_chi2_ratio_all),
+            np.asarray(chi2_sr_track_all),
+            np.asarray(chi2_helix_track_all),
+        ]),
+        delimiter=",",
+        header="log_chi2_sr_over_helix,chi2nu_sr,chi2nu_helix",
+        comments="")
+
+    print(f"Saved chi2 ratio values to {ratio_txt}")
 
     # -----------------------------
     # HTML report (minimal)
@@ -2030,6 +2300,14 @@ if __name__ == '__main__':
       </a>
 
       <div class="eq">${eqBlock}</div>
+      <br>
+      <div class="card" style="margin-bottom:18px;">
+          <h2>χ² Ratio Distribution</h2>
+          <p class="subtle">
+            Negative values mean SR fits better than helix; positive values mean helix fits better.
+          </p>
+          <img src="__RATIO_HIST_PNG__" alt="chi2 ratio histogram"/>
+        </div>
     `;
 
     
@@ -2252,6 +2530,7 @@ if __name__ == '__main__':
     html_text = html_text.replace("__EQ_STATS_JSON__", stats_json)
     html_text = html_text.replace("__DATASET_LABEL__", html_escape(dataset_label))
     html_text = html_text.replace("__DATASET_FOLDER__", html_escape(track_folder))
+    html_text = html_text.replace("__RATIO_HIST_PNG__", html_escape(ratio_hist_png[3:]))
 
     with open(out_html, "w", encoding="utf-8") as f:
         f.write(html_text)

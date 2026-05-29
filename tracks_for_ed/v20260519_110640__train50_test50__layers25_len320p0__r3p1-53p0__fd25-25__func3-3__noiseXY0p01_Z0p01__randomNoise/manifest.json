@@ -1,0 +1,32 @@
+{
+  "created_utc": "2026-05-19T18:06:40Z",
+  "NUM_TRAIN_TRACKS": 50,
+  "NUM_TEST_TRACKS": 50,
+  "NUMBER_OF_LAYERS": 25,
+  "DETECTOR_LENGTH": 320.0,
+  "SMALLEST_LAYER": 3.1,
+  "LARGEST_LAYER": 53.0,
+  "FOURIER_DIM_TRAIN": 25,
+  "FOURIER_DIM_TEST": 25,
+  "TRAIN_FUNCTION": 3,
+  "TEST_FUNCTION": 3,
+  "DISJOINT": false,
+  "ADD_HIT_NOISE": true,
+  "HIT_NOISE_SIGMA_XY": 0.01,
+  "HIT_NOISE_SIGMA_Z": 0.01,
+  "WRITE_HIT_SIGMAS": true,
+  "STANDARD_MODEL": false,
+  "RANDOM_NOISE_MODEL": true,
+  "RANDOM_NOISE_STEP_SCALE_XY": 1.5,
+  "RANDOM_NOISE_STEP_SCALE_Z": 4.0,
+  "RANDOM_NOISE_SMOOTHING_PASSES": 10,
+  "RANDOM_NOISE_K": 15,
+  "track_latex": {
+    "model_type": "RANDOM_NOISE",
+    "latex_x": "x(t)=x_0+\\sum_{k=1}^{t}\\Delta x_k",
+    "latex_y": "y(t)=y_0+\\sum_{k=1}^{t}\\Delta y_k",
+    "latex_z": "z(t)=z_0+\\sum_{k=1}^{t}\\Delta z_k",
+    "latex_r": "r(t)=\\sqrt{x(t)^2+y(t)^2}",
+    "latex_phi": "\\phi(t)=\\operatorname{atan2}(y(t),x(t))"
+  }
+}
