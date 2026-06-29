@@ -201,64 +201,6 @@ def regression_metrics(y_true, y_pred, *, sigma=None, ddof=0, eps=1e-12):
 
     return {"R2": R2, "MSE": MSE, "MAE": MAE, "chi2": chi2, "chi2_red": chi2_red}
 
-def fit_circle_xy(x, y):
-    x = np.asarray(x).ravel()
-    y = np.asarray(y).ravel()
-
-    xc0, yc0 = np.mean(x), np.mean(y)
-    R0 = np.median(np.sqrt((x-xc0)**2 + (y-yc0)**2))
-    p0 = np.array([xc0, yc0, R0], float)
-
-    def resid(p):
-        xc, yc, R = p
-        return np.sqrt((x-xc)**2 + (y-yc)**2) - R
-
-    res = least_squares(resid, p0, loss="linear")
-    return res.x  # xc, yc, R
-
-def fit_z_vs_phase(phi_c, z, *, sig_z=None):
-    phi_c = np.asarray(phi_c).ravel()
-    z = np.asarray(z).ravel()
-
-    # z ≈ z0 + a*(phi - phi_ref)  <=>  z = b + a*phi  where b = z0 - a*phi_ref
-    A = np.vstack([np.ones_like(phi_c), phi_c]).T
-
-    if sig_z is None:
-        b, a = np.linalg.lstsq(A, z, rcond=None)[0]
-    else:
-        w = 1.0 / (np.asarray(sig_z).ravel() + 1e-12)
-        Aw = A * w[:, None]
-        zw = z * w
-        b, a = np.linalg.lstsq(Aw, zw, rcond=None)[0]
-
-    # choose phi_ref = first phi so z0 is "at first hit"
-    phi_ref = phi_c[0]
-    z0 = b + a*phi_ref
-    return z0, a, phi_ref
-
-def helix_xyz_phi(phi, p):
-    # p = [xc, yc, R, z0, a, phi_ref]
-    xc, yc, R, z0, a, phi_ref = p
-    x = xc + R * np.cos(phi)
-    y = yc + R * np.sin(phi)
-    z = z0 + a * (phi - phi_ref)
-    return x, y, z
-
-def helix_xyz(s, p):
-    """
-    Simple 3D helix parametrized by s:
-      x = xc + R cos(omega s + phi0)
-      y = yc + R sin(omega s + phi0)
-      z = z0 + k s
-    p = [xc, yc, R, omega, phi0, z0, k]
-    """
-    xc, yc, R, omega, phi0, z0, k = p
-    th = omega * s + phi0
-    x = xc + R * np.cos(th)
-    y = yc + R * np.sin(th)
-    z = z0 + k * s
-    return x, y, z
-
 def r2_score_1d(y_true, y_pred):
     """
     Compute R^2 = 1 - SS_res / SS_tot for 1D numpy arrays.
@@ -357,6 +299,8 @@ def _estimate_num_params(model):
     For PySR, the hall-of-fame includes 'n_params' sometimes, but not always.
     We fall back to counting 'C' constants in sympy or just 0.
     """
+    if not USE_K:
+        return 0
     try:
         # PySR typically provides get_best() / sympy() depending on version
         # safest: model.get_best() returns a dict with 'sympy_format'
@@ -743,7 +687,7 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None, timeout_second
             p0,
             jac=jacobian if USE_ANALYTIC_JAC else '2-point',
 #            bounds=(lb, ub),
-            loss="soft_l1",
+            loss="linear",
 #            x_scale=scale,
             method="trf",
             max_nfev=MAX_TEMPLATE_NFEV,
@@ -924,6 +868,7 @@ if __name__ == '__main__':
         return out
     np.sech = safe_sech
 #    np.sech = lambda x: 1/np.cosh(x)
+    EARLY_STOPPING = False
     TEMPLATE_FIT_TIMEOUT_SECONDS = 60.0
     MAX_TEMPLATE_NFEV = None
     PROFILE_TEMPLATE_FITS = True
@@ -935,7 +880,7 @@ if __name__ == '__main__':
     TEMPLATE_PATH = "track_templates.pkl"
     SYNC_TEMPLATES = False
     printTemplatesOnly = False
-    templates_to_delete = {}#{"x_templates": {}, "y_templates": {48}, "z_templates": {}}
+    templates_to_delete = {}#{"x_templates": {43}, "y_templates": {43}, "z_templates": {43}}
     ADD_FUNC_TO_TEMPLATES = create_dataset_only and True
     R2_THRESHOLD = 0.997
     CHI2_THRESHOLD = 1.0
@@ -945,7 +890,7 @@ if __name__ == '__main__':
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
     
-    track_dataset_idx = 10
+    track_dataset_idx = 11
     out_html = [
         #legacy
         #------
@@ -963,7 +908,9 @@ if __name__ == '__main__':
         "v20260518_131139__train50_test50__layers25_len320p0__r3p1-53p0__fd5-5__func3-3__noiseXY0p01_Z0p01.html", #5-mode 100 tracks
         "v20260518_142036__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html", #25-mode 100 tracks
         "v20260518_142850__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html", #helix 100 tracks
-        "v20260519_110640__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__randomNoise.html" #random-noise 100 tracks
+        "v20260519_110640__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__randomNoise.html", #random-noise 100 tracks
+        "True_Fakes_Levi_Train_SM+Schwartz_Set_19_Test_SM+Schwartz_Set_10.html" #true fakes 100 tracks
+        
     ]
     track_folder = [f"../tracks_for_ed/{i[:-5]}" for i in out_html]
     dataset_labels = [
@@ -983,7 +930,9 @@ if __name__ == '__main__':
         "v20260518_131139 train/test (noise XY=0.01, Z=0.01) Fourier-Dim = 5",
         "v20260518_142036 train/test (noise XY=0.01, Z=0.01) Fourier-Dim = 25",
         "v20260518_142850 train/test (noise XY=0.01, Z=0.01) Standard Model",
-        "v20260519_110640 train/test (noise XY=0.01, Z=0.01) Random Noise"
+        "v20260519_110640 train/test (noise XY=0.01, Z=0.01) Random Noise",
+        "True_Fakes_Levi_Train_SM+Schwartz_Set_19_Test_SM+Schwartz_Set_10 train/test (noise XY=0.01, Z=0.01) True Fakes"
+        
     ]
 #    print(out_html, track_folder, dataset_labels, sep='\n');
     track_folder = track_folder[track_dataset_idx]
@@ -1590,7 +1539,7 @@ if __name__ == '__main__':
                 for idx, template in enumerate(templates):
                     try:
                         t0 = time.perf_counter() if PROFILE_TEMPLATE_FITS else 0
-                        metrics, p_opt, expr_fitted, timed_out = fit_template_to_data(template, s_data, y_data, sigma=sigma, timeout_seconds = TEMPLATE_FIT_TIMEOUT_SECONDS)
+                        metrics, p_opt, expr_fitted, y_pred, timed_out = fit_template_to_data(template, s_data, y_data, sigma=sigma, timeout_seconds = TEMPLATE_FIT_TIMEOUT_SECONDS)
                         if PROFILE_TEMPLATE_FITS:
                             dt = time.perf_counter() - t0
                             fit_time_records.append({
@@ -1632,8 +1581,8 @@ if __name__ == '__main__':
                         best_expr = expr_fitted
                         best_template_index = idx
 
-                    # 2) If good enough, use best template
-                    if best_metrics is not None:
+                    # 2) If good enough, use best template immediately only when EARLY_STOPPING=True.
+                    if EARLY_STOPPING and (best_metrics is not None):
                         if is_weighted():
                             if best_metrics["chi2_red"] < CHI2_RED_TARGET:
                                 print(
@@ -1738,7 +1687,7 @@ if __name__ == '__main__':
             templates.append(template)
             new_template_index = len(templates) - 1
 
-            metrics_new, _, expr_fitted_new, _ = fit_template_to_data(template, s_data, y_data, sigma=sigma)
+            metrics_new, _, expr_fitted_new, _, _ = fit_template_to_data(template, s_data, y_data, sigma=sigma)
 
             # If templates existed and one of them was better, keep it instead of PySR
             if best_metrics is not None:
@@ -1819,7 +1768,7 @@ if __name__ == '__main__':
                 xc, yc, R = p
                 return np.sqrt((x_all - xc)**2 + (y_all - yc)**2) - R
 
-            res_xy = least_squares(circle_resid, [xc0, yc0, R0], loss="soft_l1", f_scale=1.0)
+            res_xy = least_squares(circle_resid, [xc0, yc0, R0], loss="linear", f_scale=1.0)
             xc_fit, yc_fit, R_fit = res_xy.x
             print("circle RMS:", np.std(circle_resid([xc_fit, yc_fit, R_fit])))
 
@@ -1850,7 +1799,7 @@ if __name__ == '__main__':
             # --- 5) diagnostics ---
             res_xyz = np.concatenate([x_sm - x_all, y_sm - y_all, z_sm - z_all])
             chi2 = np.sum((res_xyz / np.concatenate([sig_x, sig_y, sig_z]))**2) if sig_x is not None else np.sum(res_xyz**2)
-            dof = max(len(res_xyz) - 5, 1)  # 5 params: xc,yc,R,z0,a
+            dof = max(len(res_xyz) - 5*USE_K, 1)  # 5 params: xc,yc,R,z0,a
             chi2_red = chi2 / dof
 
             sm_metrics = {

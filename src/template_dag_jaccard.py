@@ -2,7 +2,10 @@ import pickle
 import numpy as np
 import pandas as pd
 import sympy as sp
+import matplotlib.pyplot as plt
+from os import system
 
+Datasets = [("25_mode", {12: 222, 14: 28, 16: 20, 17: 8, 32: 1, 48: 11, 49: 3, 44: 2, 46: 3, 13: 2}), ("5_mode", {12: 226, 14: 28, 16: 13, 17: 9, 32: 4, 48: 7, 49: 4, 44: 5, 46: 3, 13: 1})][0]
 
 CONFIG = {
     "template_path": "track_templates.pkl",
@@ -11,14 +14,15 @@ CONFIG = {
     "coord": "x",
 
     # template indices to compare
-    "indices": [12,14,16,17,49],
+    "indices": list(Datasets[1].keys()),
 
     # output CSV, or None
-    "out_csv": "../data_files/5_mode_100_dag_jaccard.csv",
+    "out_csv": f"../data_files/{Datasets[0]}_100_dag_jaccard.csv",
 
     # for structural similarity, usually keep both False
     "keep_const_values": False,
     "keep_param_names": False,
+    "out_heatmap": f"../data_files/{Datasets[0]}_100_dag_jaccard_sorted_heatmap.png",
 }
 
 
@@ -348,10 +352,97 @@ def main():
             M[a, b] = sim
             M[b, a] = sim
 
-    labels = [f"{cfg['coord']}{i}" for i in indices]
+    labels = [r"$E_{"f"{i}"r"}$" for i in indices]
     df = pd.DataFrame(M, index=labels, columns=labels)
+    
+    # ---- sort by most-central / medoid template ----
+    offdiag_sums = M.sum(axis=1) - 1.0
+    medoid_pos = int(np.argmax(offdiag_sums))
+    medoid_label = labels[medoid_pos]
 
-    print(df.to_string(float_format=lambda x: f"{x:.3f}"))
+    order = np.argsort(-M[medoid_pos, :])
+    M_sorted = M[np.ix_(order, order)]
+    labels_sorted = [labels[i] for i in order]
+    
+    # ---- cumulative percent fit histograms ----
+    fit_counts = np.array([Datasets[1][i] for i in indices], dtype=float)
+    total_fit = fit_counts.sum()
+
+    def plot_cumulative_fit(order, title, out_path):
+        counts_ordered = fit_counts[order]
+        labels_ordered = [labels[i] for i in order]
+        cum_pct = 100.0 * np.cumsum(counts_ordered) / total_fit
+        print(f"cum_pct = {cum_pct}")
+
+        fig, ax = plt.subplots(figsize=(1.0 * n + 2, 5))
+        ax.bar(
+            np.arange(n),
+            cum_pct,
+            width=1.0,      # bars touch
+            align="center",
+            edgecolor="black",
+            linewidth=1.5
+        )
+        ax.margins(x=0)
+        ax.set_xlim(-0.5, n - 0.5)
+        ax.set_xticks(np.arange(n))
+        ax.set_xticklabels(labels_ordered, rotation=45, ha="right")
+        ax.set_ylabel("Cumulative percentage of expressions fit")
+        ax.set_ylim(0, 100)
+        ax.set_title(title)
+
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=300)
+        print(f"Saved cumulative histogram to {out_path}")
+        system(f'open "{out_path}"')
+
+    count_order = np.argsort(-fit_counts)
+
+    plot_cumulative_fit(
+        count_order,
+        "Cumulative expressions fit, sorted by number of tracks fit",
+        f"../data_files/{Datasets[0]}_100_cumulative_fit_by_count.png",
+    )
+
+    plot_cumulative_fit(
+        order,
+        "Cumulative expressions fit, sorted by DAG Jaccard heatmap order",
+        f"../data_files/{Datasets[0]}_100_cumulative_fit_by_dag_order.png",
+    )
+
+    df_sorted = pd.DataFrame(M_sorted, index=labels_sorted, columns=labels_sorted)
+    
+    # ---- heatmap of sorted matrix ----
+    fig, ax = plt.subplots(figsize=(1.0 * n + 2, 1.0 * n + 2))
+
+    im = ax.imshow(M_sorted, vmin=0, vmax=1)
+
+    ax.set_xticks(np.arange(n))
+    ax.set_yticks(np.arange(n))
+    ax.set_xticklabels(labels_sorted, rotation=45, ha="right")
+    ax.set_yticklabels(labels_sorted)
+
+    for i in range(n):
+        for j in range(n):
+            ax.text(
+                j, i, f"{M_sorted[i, j]:.2f}",
+                ha="center", va="center",
+                fontsize=12
+            )
+
+    ax.set_title(r"DAG Jaccard similarity $J(E_i,E_j)=\dfrac{|D(E_i)\cap D(E_j)|}{|D(E_i)\cup D(E_j)|}$,"f"\nsorted by medoid {medoid_label}")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+
+    if cfg.get("out_heatmap"):
+        plt.savefig(cfg["out_heatmap"], dpi=300)
+        print(f"Saved heatmap to {cfg['out_heatmap']}")
+        system(f'open {cfg["out_heatmap"]}')
+
+    print("\n=== Similarity matrix sorted by medoid ===")
+    print(f"medoid = {medoid_label}")
+    print(df_sorted.to_string(float_format=lambda x: f"{x:.3f}"))
 
     upper = M[np.triu_indices(n, k=1)]
     upper_sum = upper.sum()

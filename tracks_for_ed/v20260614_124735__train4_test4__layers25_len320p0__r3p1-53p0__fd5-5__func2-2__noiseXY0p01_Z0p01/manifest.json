@@ -1,0 +1,32 @@
+{
+  "created_utc": "2026-06-14T19:47:35Z",
+  "NUM_TRAIN_TRACKS": 4,
+  "NUM_TEST_TRACKS": 4,
+  "NUMBER_OF_LAYERS": 25,
+  "DETECTOR_LENGTH": 320.0,
+  "SMALLEST_LAYER": 3.1,
+  "LARGEST_LAYER": 53.0,
+  "FOURIER_DIM_TRAIN": 5,
+  "FOURIER_DIM_TEST": 5,
+  "TRAIN_FUNCTION": 2,
+  "TEST_FUNCTION": 2,
+  "DISJOINT": false,
+  "ADD_HIT_NOISE": true,
+  "HIT_NOISE_SIGMA_XY": 0.01,
+  "HIT_NOISE_SIGMA_Z": 0.01,
+  "WRITE_HIT_SIGMAS": true,
+  "STANDARD_MODEL": false,
+  "RANDOM_NOISE_MODEL": false,
+  "RANDOM_NOISE_STEP_SCALE_XY": 1.5,
+  "RANDOM_NOISE_STEP_SCALE_Z": 4.0,
+  "RANDOM_NOISE_SMOOTHING_PASSES": 10,
+  "RANDOM_NOISE_K": 15,
+  "track_latex": {
+    "model_type": "FOURIER",
+    "latex_x": "x(t)=a_{0,x}\\cos\\!\\left(\\frac{2\\pi  (0) t}{\\Lambda}-\\delta_{0,x}\\right) + a_{1,x}\\cos\\!\\left(\\frac{2\\pi  (1) t}{\\Lambda}-\\delta_{1,x}\\right) + a_{2,x}\\cos\\!\\left(\\frac{2\\pi  (2) t}{\\Lambda}-\\delta_{2,x}\\right) + a_{3,x}\\cos\\!\\left(\\frac{2\\pi  (3) t}{\\Lambda}-\\delta_{3,x}\\right) + a_{4,x}\\cos\\!\\left(\\frac{2\\pi  (4) t}{\\Lambda}-\\delta_{4,x}\\right) + a_{5,x}\\cos\\!\\left(\\frac{2\\pi  (5) t}{\\Lambda}-\\delta_{5,x}\\right) + x_{\\mathrm{shift}}",
+    "latex_y": "y(t)=a_{0,y}\\cos\\!\\left(\\frac{2\\pi (0) t}{\\Lambda}-\\delta_{0,y}\\right) + a_{1,y}\\cos\\!\\left(\\frac{2\\pi (1) t}{\\Lambda}-\\delta_{1,y}\\right) + a_{2,y}\\cos\\!\\left(\\frac{2\\pi (2) t}{\\Lambda}-\\delta_{2,y}\\right) + a_{3,y}\\cos\\!\\left(\\frac{2\\pi (3) t}{\\Lambda}-\\delta_{3,y}\\right) + a_{4,y}\\cos\\!\\left(\\frac{2\\pi (4) t}{\\Lambda}-\\delta_{4,y}\\right) + a_{5,y}\\cos\\!\\left(\\frac{2\\pi (5) t}{\\Lambda}-\\delta_{5,y}\\right) + y_{\\mathrm{shift}}",
+    "latex_z": "z(t)=a_{0,z}\\cos\\!\\left(\\frac{2\\pi (0) t}{\\Lambda}-\\delta_{0,z}\\right) + a_{1,z}\\cos\\!\\left(\\frac{2\\pi (1) t}{\\Lambda}-\\delta_{1,z}\\right) + a_{2,z}\\cos\\!\\left(\\frac{2\\pi (2) t}{\\Lambda}-\\delta_{2,z}\\right) + a_{3,z}\\cos\\!\\left(\\frac{2\\pi (3) t}{\\Lambda}-\\delta_{3,z}\\right) + a_{4,z}\\cos\\!\\left(\\frac{2\\pi (4) t}{\\Lambda}-\\delta_{4,z}\\right) + a_{5,z}\\cos\\!\\left(\\frac{2\\pi (5) t}{\\Lambda}-\\delta_{5,z}\\right) + z_{\\mathrm{shift}}",
+    "latex_r": "r(t)=\\sqrt{x(t)^2+y(t)^2}",
+    "latex_phi": "\\phi(t)=\\operatorname{atan2}(y(t),x(t))"
+  }
+}

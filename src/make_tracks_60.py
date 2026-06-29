@@ -12,8 +12,8 @@ from os import system
 INPUTS = {
     # Required in practice
     "OUTPUT_FOLDER": "",
-    "NUM_TRAIN_TRACKS": 50,
-    "NUM_TEST_TRACKS": 50,
+    "NUM_TRAIN_TRACKS": 4,
+    "NUM_TEST_TRACKS": 4,
 
     # Detector geometry
     "NUMBER_OF_LAYERS": 25,
@@ -40,7 +40,7 @@ INPUTS = {
     "STANDARD_MODEL": False,
     
     # Random Noise?
-    "RANDOM_NOISE_MODEL": True,
+    "RANDOM_NOISE_MODEL": False,
 
     # Random-noise track controls
     "RANDOM_NOISE_STEP_SCALE_XY": 1.5,
@@ -996,7 +996,7 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
                 event_id = event + train_size + validate_size + number_of_chunks * chunk_size + 1
 
 
-            prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer, 
+            prepare_signal_dfs(number_of_chunks, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer,
                             event_id, final_iteration = True, signal_hits = signal_hits, remaining_events_after_chunks = remaining_events_after_chunks)
     
     print("\n==================== OUTPUT SUMMARY ====================")

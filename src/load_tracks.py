@@ -19,12 +19,27 @@ def compute_arc_length(x, y, z):
 
 def load_single_track(csv_path, param="arc"):
     df = pd.read_csv(csv_path)
+    x, y, z = None, None, None
+    # Prefer Cartesian coordinates if present.
+    # This is important for finder-output files, which already store x,y,z.
+    if {"x", "y", "z"}.issubset(df.columns):
+        x = df["x"].to_numpy(dtype=float)
+        y = df["y"].to_numpy(dtype=float)
+        z = df["z"].to_numpy(dtype=float)
 
-    r   = df["r"].values
-    phi = df["phi"].values
-    z   = df["z"].values
+        # Still define r, phi for sigma propagation / diagnostics if available.
+        if {"r", "phi"}.issubset(df.columns):
+            r = df["r"].to_numpy(dtype=float)
+            phi = df["phi"].to_numpy(dtype=float)
+        else:
+            r = np.sqrt(x**2 + y**2)
+            phi = np.arctan2(y, x)
 
-    x, y, z = cylindrical_to_cartesian(r, phi, z)
+    else:
+        r   = df["r"].values
+        phi = df["phi"].values
+        z   = df["z"].values
+        x, y, z = cylindrical_to_cartesian(r, phi, z)
     s = None
     if param == "index":
         s = np.arange(len(x), dtype=float) # <-- hit index parameterization
