@@ -8,12 +8,17 @@ import re
 from datetime import datetime
 import glob
 from os import system
+import gc
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
 
 INPUTS = {
     # Required in practice
-    "OUTPUT_FOLDER": "",
-    "NUM_TRAIN_TRACKS": 4,
-    "NUM_TEST_TRACKS": 4,
+    "OUTPUT_FOLDER": "validation_weird25_10k",
+    "NUM_TRAIN_TRACKS": 0,
+    "NUM_TEST_TRACKS": 10000,
 
     # Detector geometry
     "NUMBER_OF_LAYERS": 25,
@@ -24,8 +29,8 @@ INPUTS = {
     # Fourier settings
     "FOURIER_DIM_TRAIN": 25,
     "FOURIER_DIM_TEST": 25,
-    "TRAIN_FUNCTION": 2,
-    "TEST_FUNCTION": 2,
+    "TRAIN_FUNCTION": 3,
+    "TEST_FUNCTION": 3,
 
     # Train/test split behavior
     "DISJOINT": False,
@@ -47,6 +52,12 @@ INPUTS = {
     "RANDOM_NOISE_STEP_SCALE_Z": 4.0,
     "RANDOM_NOISE_SMOOTHING_PASSES": 10,
     "RANDOM_NOISE_K": 15, #down-sampling factor
+    
+    # Validation / memory controls
+    "N_TIME_SAMPLES": 50000,
+    "CHUNK_SIZE": 1,
+    "PLOTTING": False,
+    "PROGRESS_EVERY": 100,
 }
 
 # Physical Constants
@@ -199,20 +210,25 @@ else: min_test_radii = [0 for n in range(fourierDimTest)]
 fourierCenters = np.zeros(fourierDimTrain)
 Lambda = np.max(ATLASradii)
 min_dist_to_detector_layer = 0.05
-times = np.linspace(0,Lambda, 500000)
+N_TIME_SAMPLES = int(INPUTS.get("N_TIME_SAMPLES", 500000))
+times = np.linspace(0, Lambda, N_TIME_SAMPLES)
 
 # PLOTTING
 # ========
-plotting = True
-plot_hits_and_curve = True
-plot_curve_only = False
+plotting = bool(INPUTS.get("PLOTTING", True))
+plot_hits_and_curve = plotting and bool(INPUTS.get("PLOT_HITS_AND_CURVE", True))
+plot_curve_only = plotting and bool(INPUTS.get("PLOT_CURVE_ONLY", False))
 plotting_datatype = 'train'
-num_plotted_samples = 3
+num_plotted_samples = int(INPUTS.get("NUM_PLOTTED_SAMPLES", 3))
 plotting_save_file = 'plot_4_of_tracks'
 plot_title = "Schwarts space tracks"
 
-chunk_size = 4 # how many events are generated in one batch (one chunk).
+chunk_size = int(INPUTS.get("CHUNK_SIZE", 4))
+PROGRESS_EVERY = int(INPUTS.get("PROGRESS_EVERY", 25))
 
+print(f"N_TIME_SAMPLES = {N_TIME_SAMPLES}")
+print(f"chunk_size = {chunk_size}")
+print(f"plotting = {plotting}")
 # Physical constants (exact)
 _C = 2.99792458e8               # speed of light, m/s
 _E_CHARGE = 1.602176634e-19     # elementary charge, C
@@ -261,6 +277,34 @@ def fourierExpand(fourierDim, Lambda, t, chunk_size = chunk_size):
         fourList.append(np.cos(2 * np.pi * f_dimension * t[:,np.newaxis, np.newaxis]/Lambda - shift[:,f_dimension,:,:]))
     fourList = np.array(fourList)
     return (fourList, shift)
+
+def fourierExpand(fourierDim, Lambda, t, chunk_size=chunk_size):
+    """
+    Memory-lighter Fourier basis.
+
+    Returns:
+      fourList: shape (fourierDim, len(t), 3, chunk_size)
+      shift:    shape (fourierDim, 3, chunk_size)
+
+    The old version repeated shift to shape
+      (len(t), fourierDim, 3, chunk_size),
+    which wasted a lot of memory.
+    """
+    t = np.asarray(t)
+
+    shift = np.random.uniform(
+        0,
+        2 * np.pi,
+        size=(fourierDim, 3, chunk_size),
+    )
+
+    n = np.arange(fourierDim)[:, None, None, None]
+    tt = t[None, :, None, None]
+    phase = shift[:, None, :, :]
+
+    fourList = np.cos(2 * np.pi * n * tt / Lambda - phase)
+
+    return fourList, shift
 
 # add near the other helpers, e.g. after fourierExpand(...)
 def build_track_latex(STANDARD_MODEL, RANDOM_NOISE_MODEL=False, fourierDim=None, Lambda=None):
@@ -579,10 +623,15 @@ def tracks_cylindrical_fourier_balls(t,fourierDim, Lambda, chunk_size, radii, mi
     #tracemalloc.start()
 
     fourierExp ,phase_shifts = fourierExpand(fourierDim, Lambda, t, chunk_size)
-    cosPhases = np.cos(phase_shifts)
+#    cosPhases = np.cos(phase_shifts)
+    cosPhases0 = np.cos(phase_shifts[:, :, :])
     fourierCoefficients = make_tracks_from_fourier_balls(chunk_size,fourierDim, radii, min_radii, centers) #(fourierDim,chunk_size ,3)
 #    print(fourierCoefficients)
-    translate_to_origin = -np.sum(cosPhases[0] * np.transpose(fourierCoefficients, axes = [0,2,1]), axis = 0) # shapes (time, fourDim, 3, chunk),  (fourierDim,chunk_size ,3)
+#    translate_to_origin = -np.sum(cosPhases[0] * np.transpose(fourierCoefficients, axes = [0,2,1]), axis = 0) # shapes (time, fourDim, 3, chunk),  (fourierDim,chunk_size ,3)
+    translate_to_origin = -np.sum(
+        cosPhases0 * np.transpose(fourierCoefficients, axes=[0, 2, 1]),
+        axis=0,
+    )
     cartesian_curve = np.sum(fourierExp * np.transpose(fourierCoefficients, axes=[0,2,1])[:,np.newaxis,:,:],axis = 0) # shapes (fourDim, time, 3, chunk), (fourierDim,chunk_size ,3), sum over fourierDim
     cartesian_curve = cartesian_curve + translate_to_origin
     #cartesian_curve has shape (time steps, coordinates, chunk_size)
@@ -915,7 +964,18 @@ def prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, t
         signal_hits_df.to_csv(os.path.join(output_dir,new_output_folder,f'event{event_id + 100000000}-hits.csv'), index=False)
         del signal_particle_df
         del signal_hits_df
-        
+
+def print_progress(prefix, done, total, t0):
+    elapsed = time.time() - t0
+    rate = done / elapsed if elapsed > 0 else 0.0
+    remaining = (total - done) / rate if rate > 0 else float("nan")
+    print(
+        f"[{prefix}] {done}/{total} tracks "
+        f"({100.0 * done / max(total, 1):.1f}%) | "
+        f"elapsed {elapsed/60:.1f} min | "
+        f"ETA {remaining/60:.1f} min",
+        flush=True,
+    )
 
 def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times, fourierCenters, min_radii, Lambda = np.max(ATLASradii),
                min_dist_to_detector_layer = 0.0001, data_combination = 'SM and Signal'):
@@ -971,6 +1031,14 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
     number_of_chunks = np.floor(datatype_size/chunk_size).astype(int)
     remaining_events_after_chunks = datatype_size % chunk_size
     
+    t0 = time.time()
+    tracks_done = 0
+    print(
+        f"[{datatype}] generating {datatype_size} tracks "
+        f"in {number_of_chunks} full chunks + {remaining_events_after_chunks} remainder",
+        flush=True,
+    )
+    
     for chunk in range(number_of_chunks):
         # event is used as the iterator within the loop inside combine_SM_and_signal_dfs, so we pass event_id_minus_event into the function and add event to it with each loop iteration
         if datatype == 'train':
@@ -983,6 +1051,13 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
 
         prepare_signal_dfs(chunk, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer, 
                             event_id_minus_event, final_iteration = False, signal_hits = None, remaining_events_after_chunks = None)
+        
+        tracks_done += chunk_size
+
+        if (chunk % PROGRESS_EVERY == 0) or (chunk == number_of_chunks - 1):
+            print_progress(datatype, tracks_done, datatype_size, t0)
+
+        gc.collect()
             
     if remaining_events_after_chunks > 0:
         signal_hits = make_list_of_hits_from_track_model(remaining_events_after_chunks, fourierRadii, min_radii, fourierDim, times,
@@ -999,6 +1074,9 @@ def make_files(datatype, signal_tracks_per_event, fourierRadii,fourierDim ,times
             prepare_signal_dfs(number_of_chunks, chunk_size, fourierRadii, min_radii, fourierDim, times, fourierCenters, Lambda, min_dist_to_detector_layer,
                             event_id, final_iteration = True, signal_hits = signal_hits, remaining_events_after_chunks = remaining_events_after_chunks)
     
+    tracks_done += remaining_events_after_chunks
+    print_progress(datatype, tracks_done, datatype_size, t0)
+    gc.collect()
     print("\n==================== OUTPUT SUMMARY ====================")
     print(f"Script location: {os.path.abspath(__file__)}")
     print(f"Executed from:   {os.path.abspath(os.getcwd())}")

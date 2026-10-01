@@ -1,0 +1,6 @@
+label,region,n,frac,median_log_ratio_K,mean_log_ratio_K,median_n_hits,median_k_sr,median_dof_sr_raw,frac_underconstrained,frac_sr_like
+Levi purity<0.6,all,100,1.0,2.4520740258166946,3.0701778732086895,48.0,117.0,31.0,0.0,0.0
+Levi purity<0.6,constrained: N_obs > k_SR,100,1.0,2.4520740258166946,3.0701778732086895,48.0,117.0,31.0,0.0,0.0
+Levi purity<0.6,underconstrained: N_obs <= k_SR,0,0.0,,,,,,,
+Levi purity<0.6,SR-like: log_ratio_K < -10.0,0,0.0,,,,,,,
+Levi purity<0.6,not SR-like: log_ratio_K >= -10.0,100,1.0,2.4520740258166946,3.0701778732086895,48.0,117.0,31.0,0.0,0.0

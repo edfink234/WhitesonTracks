@@ -1,0 +1,1 @@
+track_idx,event_id,n_hits,n_obs,kx,ky,kz,k_sr,k_helix,old_log_ratio,old_chi2nu_sr,old_chi2nu_helix,chi2_sr_total_recovered,chi2_helix_total_recovered,chi2nu_sr_K,chi2nu_helix_K,log_ratio_K,eq_x,eq_y,eq_z,PID,particle_id,purity_reco,eff_true,n_shared,n_reco_hits,n_true_hits,pt,track_id,n_rows_csv,max_purity_reco,max_n_shared

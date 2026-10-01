@@ -1,0 +1,9 @@
+fake_population,PID,count,frac_within_population
+constrained,-2212,5,0.05
+constrained,-2112,2,0.02
+constrained,-211,47,0.47
+constrained,-11,1,0.01
+constrained,11,1,0.01
+constrained,211,41,0.41
+constrained,321,2,0.02
+constrained,2212,1,0.01

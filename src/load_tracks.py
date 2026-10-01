@@ -4,6 +4,41 @@ import glob
 import os
 from scipy.optimize import least_squares
 
+def order_hits_nearest_neighbor(x, y, z, r):
+    """
+    Geometry-only ordering of an unordered reconstructed candidate.
+
+    Start at the innermost hit and repeatedly append the nearest
+    remaining hit in 3D.
+    """
+    xyz = np.column_stack([x, y, z])
+
+    n = len(xyz)
+    if n <= 1:
+        return np.arange(n)
+
+    remaining = set(range(n))
+
+    # Start at innermost detector hit.
+    current = int(np.argmin(r))
+
+    order = [current]
+    remaining.remove(current)
+
+    while remaining:
+        candidates = np.array(list(remaining), dtype=int)
+
+        d2 = np.sum(
+            (xyz[candidates] - xyz[current])**2,
+            axis=1
+        )
+
+        current = int(candidates[np.argmin(d2)])
+        order.append(current)
+        remaining.remove(current)
+
+    return np.asarray(order, dtype=int)
+
 def cylindrical_to_cartesian(r, phi, z):
     x = r * np.cos(phi)
     y = r * np.sin(phi)

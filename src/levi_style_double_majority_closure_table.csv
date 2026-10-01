@@ -1,0 +1,7 @@
+levi_category,n_candidates,n_events,median_purity,median_eff,median_hits,median_n_true_hits,median_n_truth_contributors,frac_PID15_dominant
+double-majority matched SM/helical,402975,3920,1.0,1.0,25.0,25.0,1.0,0.0
+double-majority matched PID15 non-helical,1922,1922,1.0,1.0,25.0,25.0,1.0,1.0
+partial PID15 non-helical,445,383,1.0,0.3191489361702128,17.0,55.0,1.0,1.0
+GNN merged/glued artifact,148,137,0.5319148936170213,1.0,45.0,25.0,2.0,0.013513513513513514
+Levi-style fake after removing partial PID15/merged,0,0,,,,,,
+below 15-hit candidate threshold,83209,3883,1.0,0.04,1.0,29.0,1.0,0.697388503647442

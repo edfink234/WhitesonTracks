@@ -1,0 +1,4 @@
+constraint_region,kx,ky,kz,k_sr,count
+constrained,3,3,3,9,98
+constrained,21,3,3,27,1
+constrained,21,21,3,45,1

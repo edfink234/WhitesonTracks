@@ -1,0 +1,2 @@
+fake_population,count,mean_n_hits,median_n_hits,mean_dof_sr_raw,median_dof_sr_raw,mean_purity_reco,median_purity_reco,mean_eff_true,median_eff_true,mean_n_shared,median_n_shared,mean_n_reco_hits,median_n_reco_hits,mean_n_true_hits,median_n_true_hits,mean_pt,median_pt,mean_log_ratio_K,median_log_ratio_K
+constrained,100,44.93,48.0,30.28,31.0,0.5213597079036582,0.5102040816326531,0.9706592226613965,1.0,24.11,25.0,46.39,48.0,24.84,25.0,6.643264747379723,1.8294624275268714,3.0701778732086895,2.4520740258166946

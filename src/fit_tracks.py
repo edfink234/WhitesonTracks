@@ -718,6 +718,218 @@ def fit_template_to_data(template, s_data, y_data, *, sigma=None, timeout_second
 
     return best_result+(timed_out,)
 
+def template_num_params(template):
+    return len(template.get("param_syms", []))
+
+
+def freeze_one_template_param(template, p_opt, freeze_idx):
+    """
+    Return a new template where one parameter is fixed to its fitted value.
+
+    This reduces k by 1. Remaining parameters are re-numbered a0, a1, ...
+    so the HTML / later k-counting stays clean.
+    """
+    template = template_with_seed_params(template)
+
+    expr = template["expr"]
+    s_sym = template["s_sym"]
+    old_params = list(template["param_syms"])
+    p_opt = np.asarray(p_opt, dtype=float)
+
+    if freeze_idx < 0 or freeze_idx >= len(old_params):
+        raise IndexError(f"freeze_idx={freeze_idx} outside 0..{len(old_params)-1}")
+
+    # Fix this parameter numerically.
+    expr = expr.subs({old_params[freeze_idx]: float(p_opt[freeze_idx])})
+
+    # Keep the remaining parameters that actually survive in the expression.
+    remaining_old = [
+        a for j, a in enumerate(old_params)
+        if j != freeze_idx and a in expr.free_symbols
+    ]
+
+    # Re-number parameters to a0, a1, ...
+    new_params = [sp.Symbol(f"a{i}") for i in range(len(remaining_old))]
+    renumber = {old: new for old, new in zip(remaining_old, new_params)}
+    expr_new = expr.xreplace(renumber)
+
+    # Initial values are the previous fitted values for the remaining params.
+    old_to_value = {a: float(p_opt[j]) for j, a in enumerate(old_params)}
+    init_params = np.array([old_to_value[a] for a in remaining_old], dtype=float)
+
+    return {
+        "expr": expr_new,
+        "s_sym": s_sym,
+        "param_syms": new_params,
+        "init_params": init_params,
+        "seed_params": init_params.copy(),
+    }
+
+def metric_value_for_selection(metrics, weighted):
+    """
+    Smaller is better.
+    Weighted fits: minimize chi2_red.
+    Unweighted fits: maximize R2, so use -R2.
+    """
+    if weighted:
+        return metrics["chi2_red"]
+    return -metrics["R2"]
+
+
+def prune_template_by_backward_freezing(
+    template,
+    s_data,
+    y_data,
+    sigma,
+    target_k,
+    *,
+    initial_p_opt=None,
+    initial_metrics=None,
+    weighted=True,
+    time_limit_seconds=45.0,
+    candidate_timeout_seconds=4.0,
+    max_steps=50,
+    max_candidates_per_round=12,
+):
+    """
+    Greedy backward selection by freezing fitted constants.
+
+    At each step:
+      - try freezing candidate parameters one at a time,
+      - refit remaining free parameters,
+      - keep the freeze that hurts the metric least,
+      - repeat until k <= target_k or time runs out.
+
+    This is not globally optimal. It is a diagnostic complexity-control pass.
+    """
+    start = time.perf_counter()
+
+    current_template = template_with_seed_params(template)
+
+    if initial_p_opt is None or initial_metrics is None:
+        try:
+            initial_metrics, initial_p_opt, _, _, _ = fit_template_to_data(
+                current_template,
+                s_data,
+                y_data,
+                sigma=sigma,
+                timeout_seconds=candidate_timeout_seconds,
+            )
+        except Exception:
+            return current_template, None, None, {
+                "pruned": False,
+                "reason": "initial fit failed",
+                "k_initial": template_num_params(current_template),
+                "k_final": template_num_params(current_template),
+            }
+
+    current_p = np.asarray(initial_p_opt, dtype=float)
+    current_metrics = initial_metrics
+
+    k_initial = template_num_params(current_template)
+    history = []
+
+    if k_initial <= target_k:
+        return current_template, current_metrics, current_p, {
+            "pruned": False,
+            "reason": "already within target",
+            "k_initial": k_initial,
+            "k_final": k_initial,
+            "history": history,
+        }
+
+    for step in range(max_steps):
+        if template_num_params(current_template) <= target_k:
+            break
+
+        if time.perf_counter() - start > time_limit_seconds:
+            print("[prune] time limit reached")
+            break
+
+        k_now = template_num_params(current_template)
+
+        # Cheap candidate ordering:
+        # try freezing smaller absolute fitted constants first.
+        # This is not perfect, but it avoids testing 100 params per step.
+        candidate_order = sorted(
+            range(k_now),
+            key=lambda j: abs(float(current_p[j])) if j < len(current_p) else np.inf,
+        )
+
+        candidate_order = candidate_order[:max_candidates_per_round]
+
+        best_candidate = None
+        best_score = np.inf
+
+        for freeze_idx in candidate_order:
+            remaining_time = time_limit_seconds - (time.perf_counter() - start)
+            if remaining_time <= 0:
+                break
+
+            try:
+                cand_template = freeze_one_template_param(
+                    current_template,
+                    current_p,
+                    freeze_idx,
+                )
+
+                cand_metrics, cand_p, cand_expr, cand_pred, cand_timed_out = fit_template_to_data(
+                    cand_template,
+                    s_data,
+                    y_data,
+                    sigma=sigma,
+                    timeout_seconds=min(candidate_timeout_seconds, remaining_time),
+                )
+
+                score = metric_value_for_selection(cand_metrics, weighted)
+
+                if score < best_score:
+                    best_score = score
+                    best_candidate = {
+                        "freeze_idx": freeze_idx,
+                        "template": cand_template,
+                        "metrics": cand_metrics,
+                        "p_opt": cand_p,
+                        "score": score,
+                    }
+
+            except Exception as e:
+                continue
+
+        if best_candidate is None:
+            print("[prune] no valid freeze candidate found")
+            break
+
+        old_score = metric_value_for_selection(current_metrics, weighted)
+        new_score = best_candidate["score"]
+
+        print(
+            f"[prune] step={step}, k {k_now}->{k_now-1}, "
+            f"freeze_idx={best_candidate['freeze_idx']}, "
+            f"score {old_score:.3e}->{new_score:.3e}"
+        )
+
+        history.append({
+            "step": step,
+            "k_before": k_now,
+            "k_after": k_now - 1,
+            "freeze_idx": best_candidate["freeze_idx"],
+            "old_score": old_score,
+            "new_score": new_score,
+        })
+
+        current_template = best_candidate["template"]
+        current_metrics = best_candidate["metrics"]
+        current_p = best_candidate["p_opt"]
+
+    return current_template, current_metrics, current_p, {
+        "pruned": template_num_params(current_template) < k_initial,
+        "reason": "done",
+        "k_initial": k_initial,
+        "k_final": template_num_params(current_template),
+        "history": history,
+    }
+
 def summarize_families(coord_name, templates, families, r2_list):
     """
     Print text summary + emit LaTeX table and LaTeX equation list
@@ -871,6 +1083,19 @@ if __name__ == '__main__':
     EARLY_STOPPING = False
     TEMPLATE_FIT_TIMEOUT_SECONDS = 60.0
     MAX_TEMPLATE_NFEV = None
+    
+    REQUIRE_SR_CONSTRAINED = True
+    # Coordinate-wise pruning target.
+    # For n_hits=25 and margin=10:
+    #   target per coordinate = floor((3*25 - 10)/3) = 21
+    # so a 32-param coord template gets pruned toward <=21 params.
+    SR_DOF_MARGIN_TOTAL = 10
+    PRUNE_UNDERCONSTRAINED_TEMPLATES = False
+    PRUNE_TIME_LIMIT_SECONDS = 120.
+    PRUNE_CANDIDATE_TIMEOUT_SECONDS = 4.0
+    PRUNE_MAX_STEPS = 50
+    PRUNE_MAX_CANDIDATES_PER_ROUND = 12
+    
     PROFILE_TEMPLATE_FITS = True
     fit_time_records = []
     OPEN_PNGS = False
@@ -890,7 +1115,7 @@ if __name__ == '__main__':
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
     
-    track_dataset_idx = 11
+    track_dataset_idx = 15
     out_html = [
         #legacy
         #------
@@ -909,8 +1134,14 @@ if __name__ == '__main__':
         "v20260518_142036__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01.html", #25-mode 100 tracks
         "v20260518_142850__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__standardModel.html", #helix 100 tracks
         "v20260519_110640__train50_test50__layers25_len320p0__r3p1-53p0__fd25-25__func3-3__noiseXY0p01_Z0p01__randomNoise.html", #random-noise 100 tracks
-        "True_Fakes_Levi_Train_SM+Schwartz_Set_19_Test_SM+Schwartz_Set_10.html" #true fakes 100 tracks
-        
+        "Levi_dominant_purity_lt_0p6_minhits_20.html", #low purity <= 0.6 & min_hits >= 20 finder output
+        "Levi_reco_nonhelical_PID15_purity_ge_0p9_eff_ge_0p5_minhits_20.html", #purity >= 0.9 & min_hits >= 20 & eff >= 0.5 non-helical finder output
+        "Levi_SM_high_purity_minhits_20.html", #high SM purity >= 0.9 & min_hits >= 20 finder output
+        "Levi_impure_purity_lt_0p9_minhits_20.html", #purity <= 0.9 & min_hits >= 20 finder output,
+        #Finder-output 100 tracks with pileup <mu=10>
+        "mu10_finder_SM_100.html",
+        "mu10_finder_PID15_100.html",
+        "mu10_finder_fakes_100.html",
     ]
     track_folder = [f"../tracks_for_ed/{i[:-5]}" for i in out_html]
     dataset_labels = [
@@ -931,15 +1162,21 @@ if __name__ == '__main__':
         "v20260518_142036 train/test (noise XY=0.01, Z=0.01) Fourier-Dim = 25",
         "v20260518_142850 train/test (noise XY=0.01, Z=0.01) Standard Model",
         "v20260519_110640 train/test (noise XY=0.01, Z=0.01) Random Noise",
-        "True_Fakes_Levi_Train_SM+Schwartz_Set_19_Test_SM+Schwartz_Set_10 train/test (noise XY=0.01, Z=0.01) True Fakes"
-        
+        "Levi_dominant_purity_lt_0p6_minhits_20 (noise XY=0.01, Z=0.01) True Fakes",
+        "Levi_reco_nonhelical_PID15_purity_ge_0p9_eff_ge_0p5_minhits_20 (noise XY=0.01, Z=0.01) Nonhelical Tracks",
+        "Levi_SM_high_purity_minhits_20.html (noise XY=0.01, Z=0.01) Standard Model Tracks",
+        "Levi_impure_purity_lt_0p9_minhits_20 (noise XY=0.01, Z=0.01) True Fakes",
+        #Finder-output 100 tracks with pileup <mu=10>
+        r"$\mu=10$ finder-output matched Standard Model",
+        r"$\mu=10$ finder-output matched PID15",
+        r"$\mu=10$ finder-output background-only fakes",
     ]
 #    print(out_html, track_folder, dataset_labels, sep='\n');
     track_folder = track_folder[track_dataset_idx]
     dataset_label = dataset_labels[track_dataset_idx]
     out_html = out_html[track_dataset_idx]
 
-    is_standard_model_dataset = ("standardModel" in out_html)
+    is_standard_model_dataset = ("standardModel" in out_html or "SM" in out_html)
     
     usePhi = is_standard_model_dataset and True
     if usePhi:
@@ -1504,6 +1741,7 @@ if __name__ == '__main__':
                 label=label
             )
 
+    #THE BIG TRACK LOOP!
     for track_idx, (s_all, x_all, y_all, z_all, f_all,
                 sigx_from_loader, sigy_from_loader, sigz_from_loader) in enumerate(
                     zip(S, X, Y, Z, F, SIG_X_LIST, SIG_Y_LIST, SIG_Z_LIST)):
@@ -1530,14 +1768,106 @@ if __name__ == '__main__':
                 else:
                     return a["R2"] > b["R2"]
 
+            def accept_template(expr, metrics, template_index, template_obj, p_opt):
+                """
+                Optionally prune the selected coordinate template so that this coordinate
+                has a defensible parameter count.
+
+                Coordinate-wise target:
+                  k_coord <= floor((3*n_hits - SR_DOF_MARGIN_TOTAL)/3)
+
+                This implies the 3D fit should roughly satisfy:
+                  kx + ky + kz <= 3*n_hits - SR_DOF_MARGIN_TOTAL.
+                """
+                if (
+                    REQUIRE_SR_CONSTRAINED
+                    and PRUNE_UNDERCONSTRAINED_TEMPLATES
+                    and template_obj is not None
+                    and p_opt is not None
+                ):
+                    n_hits_here = len(s_data)
+                    target_k_coord = max(1, int((3 * n_hits_here - SR_DOF_MARGIN_TOTAL) // 3))
+
+                    k_before = template_num_params(template_obj)
+
+                    if k_before > target_k_coord:
+                        print(
+                            f"[Track {track_idx} {coord_name}] pruning selected template: "
+                            f"k={k_before} > target_k_coord={target_k_coord}"
+                        )
+
+                        pruned_template, pruned_metrics, pruned_p, prune_info = prune_template_by_backward_freezing(
+                            template_obj,
+                            s_data,
+                            y_data,
+                            sigma,
+                            target_k_coord,
+                            initial_p_opt=p_opt,
+                            initial_metrics=metrics,
+                            weighted=is_weighted(),
+                            time_limit_seconds=PRUNE_TIME_LIMIT_SECONDS,
+                            candidate_timeout_seconds=PRUNE_CANDIDATE_TIMEOUT_SECONDS,
+                            max_steps=PRUNE_MAX_STEPS,
+                            max_candidates_per_round=PRUNE_MAX_CANDIDATES_PER_ROUND,
+                        )
+
+                        if pruned_metrics is not None:
+                            pruned_metrics2, pruned_p2, pruned_expr, pruned_pred, _ = fit_template_to_data(
+                                pruned_template,
+                                s_data,
+                                y_data,
+                                sigma=sigma,
+                                timeout_seconds=PRUNE_CANDIDATE_TIMEOUT_SECONDS,
+                            )
+
+                            templates.append(pruned_template)
+                            pruned_index = len(templates) - 1
+
+                            k_after = template_num_params(pruned_template)
+                            status = "fully pruned" if k_after <= target_k_coord else "partially pruned"
+
+                            print(
+                                f"[Track {track_idx} {coord_name}] accepted {status} template "
+                                f"family={pruned_index}, k {k_before}->{k_after}, "
+                                f"target_k_coord={target_k_coord}, "
+                                f"chi2_red={pruned_metrics2.get('chi2_red', np.nan):.3e}, "
+                                f"R2={pruned_metrics2.get('R2', np.nan):.3f}"
+                            )
+
+                            eqn_list.append(pruned_expr)
+                            families_list.append(pruned_index)
+                            return pruned_expr, pruned_metrics2
+
+                        print(
+                            f"[Track {track_idx} {coord_name}] pruning failed; "
+                            f"falling back to unpruned template."
+                        )
+
+                # IMPORTANT: unconditional fallback.
+                # This handles:
+                #   - pruning disabled,
+                #   - template already small enough,
+                #   - pruning failed,
+                #   - REQUIRE_SR_CONSTRAINED=False.
+                eqn_list.append(expr)
+                families_list.append(template_index)
+                return expr, metrics
+                
             best_metrics = None
             best_expr = None
             best_template_index = None
+            best_template_obj = None
+            best_p_opt = None
 
             # 1) Try existing templates
             if templates:
                 for idx, template in enumerate(templates):
                     try:
+                        if REQUIRE_SR_CONSTRAINED and not PRUNE_UNDERCONSTRAINED_TEMPLATES:
+                            n_hits_here = len(s_data)
+                            target_k_coord = max(1, int((3 * n_hits_here - SR_DOF_MARGIN_TOTAL) // 3))
+                            if template_num_params(template) > target_k_coord:
+                                continue
                         t0 = time.perf_counter() if PROFILE_TEMPLATE_FITS else 0
                         metrics, p_opt, expr_fitted, y_pred, timed_out = fit_template_to_data(template, s_data, y_data, sigma=sigma, timeout_seconds = TEMPLATE_FIT_TIMEOUT_SECONDS)
                         if PROFILE_TEMPLATE_FITS:
@@ -1580,7 +1910,8 @@ if __name__ == '__main__':
                         best_metrics = metrics
                         best_expr = expr_fitted
                         best_template_index = idx
-
+                        best_template_obj = template
+                        best_p_opt = p_opt
                     # 2) If good enough, use best template immediately only when EARLY_STOPPING=True.
                     if EARLY_STOPPING and (best_metrics is not None):
                         if is_weighted():
@@ -1589,18 +1920,26 @@ if __name__ == '__main__':
                                     f"[Track {track_idx} {coord_name}] Used existing template {best_template_index} "
                                     f"with chi2_red={best_metrics['chi2_red']:.3e} (target 1)"
                                 )
-                                eqn_list.append(best_expr)
-                                families_list.append(best_template_index)
-                                return best_expr, best_metrics
+                                return accept_template(
+                                    best_expr,
+                                    best_metrics,
+                                    best_template_index,
+                                    best_template_obj,
+                                    best_p_opt,
+                                )
                         else:
                             if best_metrics["R2"] >= R2_THRESHOLD:
                                 print(
                                     f"[Track {track_idx} {coord_name}] Used existing template {best_template_index} "
                                     f"with R^2={best_metrics['R2']:.3e}"
                                 )
-                                eqn_list.append(best_expr)
-                                families_list.append(best_template_index)
-                                return best_expr, best_metrics
+                                return accept_template(
+                                    best_expr,
+                                    best_metrics,
+                                    best_template_index,
+                                    best_template_obj,
+                                    best_p_opt,
+                                )
             print(f"[Track {track_idx} {coord_name}] best template = {best_expr}")
 
             # 3) Otherwise, run PySR to discover new form
@@ -1620,9 +1959,13 @@ if __name__ == '__main__':
                         f"[Track {track_idx} {coord_name}] best_R2={best_metrics['R2']:.3f} < {R2_THRESHOLD} "
                         f"but RunPySR=False; using best available template [{best_template_index}]. "
                     )
-                eqn_list.append(best_expr)
-                families_list.append(best_template_index)
-                return best_expr, best_metrics
+                return accept_template(
+                    best_expr,
+                    best_metrics,
+                    best_template_index,
+                    best_template_obj,
+                    best_p_opt,
+                )
 
             if is_weighted():
                 best_chi2_red = float("inf") if best_metrics is None else best_metrics["chi2_red"]
@@ -1687,7 +2030,12 @@ if __name__ == '__main__':
             templates.append(template)
             new_template_index = len(templates) - 1
 
-            metrics_new, _, expr_fitted_new, _, _ = fit_template_to_data(template, s_data, y_data, sigma=sigma)
+            metrics_new, p_opt_new, expr_fitted_new, _, _ = fit_template_to_data(
+                template,
+                s_data,
+                y_data,
+                sigma=sigma,
+            )
 
             # If templates existed and one of them was better, keep it instead of PySR
             if best_metrics is not None:
@@ -1714,9 +2062,13 @@ if __name__ == '__main__':
                         return best_expr, best_metrics
 
             # Otherwise accept PySR
-            eqn_list.append(expr_fitted_new)
-            families_list.append(new_template_index)
-            return expr_fitted_new, metrics_new
+            return accept_template(
+                expr_fitted_new,
+                metrics_new,
+                new_template_index,
+                template,
+                p_opt_new,
+            )
 
         # prefer sigmas coming from loader (these match the CSV file)
         sig_x = sigx_from_loader
@@ -1753,12 +2105,26 @@ if __name__ == '__main__':
         chi2nu_sm = None
         chi2nu_helix = None
         
+        kx_selected = template_num_params(x_templates[families_x[-1]])
+        ky_selected = template_num_params(y_templates[families_y[-1]])
+        kz_selected = template_num_params(z_templates[families_z[-1]])
+        k_sr_selected = kx_selected + ky_selected + kz_selected
+        dof_sr_raw_selected = 3 * len(s_all) - k_sr_selected
+
+        print(
+            f"[SR DOF] n_hits={len(s_all)}, n_obs={3*len(s_all)}, "
+            f"kx={kx_selected}, ky={ky_selected}, kz={kz_selected}, "
+            f"k_sr={k_sr_selected}, N-k={dof_sr_raw_selected}"
+        )
+        
         chi2_sr = m_x["chi2"] + m_y["chi2"] + m_z["chi2"]
 
-        # crude but consistent; optionally subtract parameter count later
-        dof_sr = max(3 * len(s_all) - 1, 1)
-        chi2nu_sr = chi2_sr / dof_sr
+        if REQUIRE_SR_CONSTRAINED:
+            dof_sr = max(3 * len(s_all) - k_sr_selected, 1)
+        else:
+            dof_sr = max(3 * len(s_all) - 1, 1)
 
+        chi2nu_sr = chi2_sr / dof_sr
         if True:
             # --- 1) fit circle in x–y to get helix center ---
             xc0, yc0 = np.mean(x_all), np.mean(y_all)

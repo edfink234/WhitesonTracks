@@ -1,0 +1,2 @@
+sr_constraint_region,count,mean_n_hits,median_n_hits,mean_n_obs,mean_k_sr,mean_dof_sr_raw,mean_purity_reco,median_purity_reco,mean_eff_true,mean_log_ratio_K,median_log_ratio_K,frac_sr_like
+constrained: N_obs > k_SR,100,44.93,48.0,134.79,104.51,30.28,0.5213597079036582,0.5102040816326531,0.9706592226613965,3.0701778732086895,2.4520740258166946,0.0

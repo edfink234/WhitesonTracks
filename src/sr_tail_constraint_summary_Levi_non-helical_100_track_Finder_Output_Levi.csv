@@ -1,0 +1,6 @@
+label,region,n,frac,median_log_ratio_K,mean_log_ratio_K,median_n_hits,median_k_sr,median_dof_sr_raw,frac_underconstrained,frac_sr_like
+Levi non-helical,all,100,1.0,-11.28784942477764,-13.684212425847033,25.0,48.0,27.0,0.0,0.66
+Levi non-helical,constrained: N_obs > k_SR,100,1.0,-11.28784942477764,-13.684212425847033,25.0,48.0,27.0,0.0,0.66
+Levi non-helical,underconstrained: N_obs <= k_SR,0,0.0,,,,,,,
+Levi non-helical,SR-like: log_ratio_K < -10.0,66,0.66,-12.166478178799808,-16.47187072488312,25.0,48.0,27.0,0.0,1.0
+Levi non-helical,not SR-like: log_ratio_K >= -10.0,34,0.34,-8.805602590591945,-8.272875727718151,25.0,48.0,27.0,0.0,0.0
