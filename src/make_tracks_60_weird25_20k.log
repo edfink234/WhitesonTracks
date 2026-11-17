@@ -1,0 +1,227 @@
+RANDOM_NOISE_MODEL = False
+N_TIME_SAMPLES = 50000
+chunk_size = 1
+plotting = False
+making train set
+[train] generating 0 tracks in 0 full chunks + 0 remainder
+[train] 0/0 tracks (0.0%) | elapsed 0.0 min | ETA nan min
+
+==================== OUTPUT SUMMARY ====================
+Script location: /Users/edwardfinkelstein/SDSU_UCI/WhitesonResearch/TrackProject/src/make_tracks_60_weird25_20k.py
+Executed from:   /Users/edwardfinkelstein/SDSU_UCI/WhitesonResearch/TrackProject/src
+Data directory: /Users/edwardfinkelstein/SDSU_UCI/WhitesonResearch/TrackProject/tracks_for_ed/validation_weird25_10k
+20000 files written.
+========================================================
+
+making test set
+[test] generating 20000 tracks in 20000 full chunks + 0 remainder
+[test] 1/20000 tracks (0.0%) | elapsed 0.0 min | ETA 55.7 min
+[test] 101/20000 tracks (0.5%) | elapsed 0.2 min | ETA 48.4 min
+[test] 201/20000 tracks (1.0%) | elapsed 0.5 min | ETA 48.6 min
+[test] 301/20000 tracks (1.5%) | elapsed 0.7 min | ETA 47.8 min
+[test] 401/20000 tracks (2.0%) | elapsed 1.0 min | ETA 48.8 min
+[test] 501/20000 tracks (2.5%) | elapsed 1.2 min | ETA 46.6 min
+[test] 601/20000 tracks (3.0%) | elapsed 1.4 min | ETA 45.0 min
+[test] 701/20000 tracks (3.5%) | elapsed 1.6 min | ETA 44.3 min
+[test] 801/20000 tracks (4.0%) | elapsed 1.8 min | ETA 43.5 min
+[test] 901/20000 tracks (4.5%) | elapsed 2.0 min | ETA 43.0 min
+[test] 1001/20000 tracks (5.0%) | elapsed 2.3 min | ETA 43.6 min
+[test] 1101/20000 tracks (5.5%) | elapsed 2.6 min | ETA 43.8 min
+[test] 1201/20000 tracks (6.0%) | elapsed 2.8 min | ETA 44.0 min
+[test] 1301/20000 tracks (6.5%) | elapsed 3.0 min | ETA 43.5 min
+[test] 1401/20000 tracks (7.0%) | elapsed 3.3 min | ETA 43.4 min
+[test] 1501/20000 tracks (7.5%) | elapsed 3.5 min | ETA 43.3 min
+[test] 1601/20000 tracks (8.0%) | elapsed 3.7 min | ETA 42.9 min
+[test] 1701/20000 tracks (8.5%) | elapsed 4.0 min | ETA 42.6 min
+[test] 1801/20000 tracks (9.0%) | elapsed 4.2 min | ETA 42.3 min
+[test] 1901/20000 tracks (9.5%) | elapsed 4.4 min | ETA 42.2 min
+[test] 2001/20000 tracks (10.0%) | elapsed 4.6 min | ETA 41.8 min
+[test] 2101/20000 tracks (10.5%) | elapsed 4.9 min | ETA 41.5 min
+[test] 2201/20000 tracks (11.0%) | elapsed 5.1 min | ETA 41.3 min
+[test] 2301/20000 tracks (11.5%) | elapsed 5.3 min | ETA 40.9 min
+[test] 2401/20000 tracks (12.0%) | elapsed 5.5 min | ETA 40.5 min
+[test] 2501/20000 tracks (12.5%) | elapsed 5.7 min | ETA 40.1 min
+[test] 2601/20000 tracks (13.0%) | elapsed 6.0 min | ETA 39.9 min
+[test] 2701/20000 tracks (13.5%) | elapsed 6.3 min | ETA 40.5 min
+[test] 2801/20000 tracks (14.0%) | elapsed 6.7 min | ETA 41.2 min
+[test] 2901/20000 tracks (14.5%) | elapsed 7.0 min | ETA 41.4 min
+[test] 3001/20000 tracks (15.0%) | elapsed 7.3 min | ETA 41.5 min
+[test] 3101/20000 tracks (15.5%) | elapsed 7.5 min | ETA 41.1 min
+[test] 3201/20000 tracks (16.0%) | elapsed 7.8 min | ETA 40.7 min
+[test] 3301/20000 tracks (16.5%) | elapsed 8.0 min | ETA 40.3 min
+[test] 3401/20000 tracks (17.0%) | elapsed 8.2 min | ETA 40.2 min
+[test] 3501/20000 tracks (17.5%) | elapsed 8.6 min | ETA 40.5 min
+[test] 3601/20000 tracks (18.0%) | elapsed 8.9 min | ETA 40.4 min
+[test] 3701/20000 tracks (18.5%) | elapsed 9.1 min | ETA 40.2 min
+[test] 3801/20000 tracks (19.0%) | elapsed 9.4 min | ETA 40.1 min
+[test] 3901/20000 tracks (19.5%) | elapsed 9.7 min | ETA 39.9 min
+[test] 4001/20000 tracks (20.0%) | elapsed 9.9 min | ETA 39.6 min
+[test] 4101/20000 tracks (20.5%) | elapsed 10.1 min | ETA 39.3 min
+[test] 4201/20000 tracks (21.0%) | elapsed 10.4 min | ETA 39.1 min
+[test] 4301/20000 tracks (21.5%) | elapsed 10.6 min | ETA 38.7 min
+[test] 4401/20000 tracks (22.0%) | elapsed 10.8 min | ETA 38.3 min
+[test] 4501/20000 tracks (22.5%) | elapsed 11.1 min | ETA 38.1 min
+[test] 4601/20000 tracks (23.0%) | elapsed 11.3 min | ETA 37.7 min
+[test] 4701/20000 tracks (23.5%) | elapsed 11.5 min | ETA 37.4 min
+[test] 4801/20000 tracks (24.0%) | elapsed 11.8 min | ETA 37.2 min
+[test] 4901/20000 tracks (24.5%) | elapsed 12.0 min | ETA 36.9 min
+[test] 5001/20000 tracks (25.0%) | elapsed 12.3 min | ETA 36.8 min
+[test] 5101/20000 tracks (25.5%) | elapsed 12.6 min | ETA 36.8 min
+[test] 5201/20000 tracks (26.0%) | elapsed 12.8 min | ETA 36.5 min
+[test] 5301/20000 tracks (26.5%) | elapsed 13.0 min | ETA 36.2 min
+[test] 5401/20000 tracks (27.0%) | elapsed 13.2 min | ETA 35.8 min
+[test] 5501/20000 tracks (27.5%) | elapsed 13.4 min | ETA 35.4 min
+[test] 5601/20000 tracks (28.0%) | elapsed 13.6 min | ETA 35.1 min
+[test] 5701/20000 tracks (28.5%) | elapsed 13.9 min | ETA 34.7 min
+[test] 5801/20000 tracks (29.0%) | elapsed 14.1 min | ETA 34.4 min
+[test] 5901/20000 tracks (29.5%) | elapsed 14.3 min | ETA 34.1 min
+[test] 6001/20000 tracks (30.0%) | elapsed 14.5 min | ETA 33.7 min
+[test] 6101/20000 tracks (30.5%) | elapsed 14.7 min | ETA 33.4 min
+[test] 6201/20000 tracks (31.0%) | elapsed 14.9 min | ETA 33.0 min
+[test] 6301/20000 tracks (31.5%) | elapsed 15.1 min | ETA 32.7 min
+[test] 6401/20000 tracks (32.0%) | elapsed 15.3 min | ETA 32.4 min
+[test] 6501/20000 tracks (32.5%) | elapsed 15.5 min | ETA 32.1 min
+[test] 6601/20000 tracks (33.0%) | elapsed 15.7 min | ETA 31.9 min
+[test] 6701/20000 tracks (33.5%) | elapsed 16.0 min | ETA 31.7 min
+[test] 6801/20000 tracks (34.0%) | elapsed 16.2 min | ETA 31.4 min
+[test] 6901/20000 tracks (34.5%) | elapsed 16.4 min | ETA 31.1 min
+[test] 7001/20000 tracks (35.0%) | elapsed 16.6 min | ETA 30.8 min
+[test] 7101/20000 tracks (35.5%) | elapsed 16.8 min | ETA 30.5 min
+[test] 7201/20000 tracks (36.0%) | elapsed 17.0 min | ETA 30.3 min
+[test] 7301/20000 tracks (36.5%) | elapsed 17.3 min | ETA 30.0 min
+[test] 7401/20000 tracks (37.0%) | elapsed 17.5 min | ETA 29.8 min
+[test] 7501/20000 tracks (37.5%) | elapsed 17.7 min | ETA 29.6 min
+[test] 7601/20000 tracks (38.0%) | elapsed 18.0 min | ETA 29.4 min
+[test] 7701/20000 tracks (38.5%) | elapsed 18.3 min | ETA 29.1 min
+[test] 7801/20000 tracks (39.0%) | elapsed 18.6 min | ETA 29.0 min
+[test] 7901/20000 tracks (39.5%) | elapsed 18.8 min | ETA 28.8 min
+[test] 8001/20000 tracks (40.0%) | elapsed 19.0 min | ETA 28.5 min
+[test] 8101/20000 tracks (40.5%) | elapsed 19.3 min | ETA 28.4 min
+[test] 8201/20000 tracks (41.0%) | elapsed 19.6 min | ETA 28.2 min
+[test] 8301/20000 tracks (41.5%) | elapsed 19.9 min | ETA 28.0 min
+[test] 8401/20000 tracks (42.0%) | elapsed 20.2 min | ETA 27.9 min
+[test] 8501/20000 tracks (42.5%) | elapsed 20.6 min | ETA 27.9 min
+[test] 8601/20000 tracks (43.0%) | elapsed 21.0 min | ETA 27.8 min
+[test] 8701/20000 tracks (43.5%) | elapsed 21.3 min | ETA 27.6 min
+[test] 8801/20000 tracks (44.0%) | elapsed 21.5 min | ETA 27.4 min
+[test] 8901/20000 tracks (44.5%) | elapsed 21.7 min | ETA 27.1 min
+[test] 9001/20000 tracks (45.0%) | elapsed 22.0 min | ETA 26.8 min
+[test] 9101/20000 tracks (45.5%) | elapsed 22.2 min | ETA 26.5 min
+[test] 9201/20000 tracks (46.0%) | elapsed 22.4 min | ETA 26.3 min
+[test] 9301/20000 tracks (46.5%) | elapsed 22.6 min | ETA 26.0 min
+[test] 9401/20000 tracks (47.0%) | elapsed 22.8 min | ETA 25.8 min
+[test] 9501/20000 tracks (47.5%) | elapsed 23.1 min | ETA 25.5 min
+[test] 9601/20000 tracks (48.0%) | elapsed 23.3 min | ETA 25.2 min
+[test] 9701/20000 tracks (48.5%) | elapsed 23.5 min | ETA 24.9 min
+[test] 9801/20000 tracks (49.0%) | elapsed 23.8 min | ETA 24.7 min
+[test] 9901/20000 tracks (49.5%) | elapsed 24.0 min | ETA 24.5 min
+[test] 10001/20000 tracks (50.0%) | elapsed 24.2 min | ETA 24.2 min
+[test] 10101/20000 tracks (50.5%) | elapsed 24.5 min | ETA 24.0 min
+[test] 10201/20000 tracks (51.0%) | elapsed 24.7 min | ETA 23.7 min
+[test] 10301/20000 tracks (51.5%) | elapsed 24.9 min | ETA 23.4 min
+[test] 10401/20000 tracks (52.0%) | elapsed 25.1 min | ETA 23.2 min
+[test] 10501/20000 tracks (52.5%) | elapsed 25.4 min | ETA 23.0 min
+[test] 10601/20000 tracks (53.0%) | elapsed 25.6 min | ETA 22.7 min
+[test] 10701/20000 tracks (53.5%) | elapsed 25.9 min | ETA 22.5 min
+[test] 10801/20000 tracks (54.0%) | elapsed 26.2 min | ETA 22.3 min
+[test] 10901/20000 tracks (54.5%) | elapsed 26.4 min | ETA 22.0 min
+[test] 11001/20000 tracks (55.0%) | elapsed 26.6 min | ETA 21.7 min
+[test] 11101/20000 tracks (55.5%) | elapsed 26.8 min | ETA 21.5 min
+[test] 11201/20000 tracks (56.0%) | elapsed 27.0 min | ETA 21.2 min
+[test] 11301/20000 tracks (56.5%) | elapsed 27.2 min | ETA 20.9 min
+[test] 11401/20000 tracks (57.0%) | elapsed 27.4 min | ETA 20.6 min
+[test] 11501/20000 tracks (57.5%) | elapsed 27.6 min | ETA 20.4 min
+[test] 11601/20000 tracks (58.0%) | elapsed 27.8 min | ETA 20.1 min
+[test] 11701/20000 tracks (58.5%) | elapsed 28.0 min | ETA 19.8 min
+[test] 11801/20000 tracks (59.0%) | elapsed 28.2 min | ETA 19.6 min
+[test] 11901/20000 tracks (59.5%) | elapsed 28.4 min | ETA 19.3 min
+[test] 12001/20000 tracks (60.0%) | elapsed 28.6 min | ETA 19.0 min
+[test] 12101/20000 tracks (60.5%) | elapsed 28.8 min | ETA 18.8 min
+[test] 12201/20000 tracks (61.0%) | elapsed 29.0 min | ETA 18.5 min
+[test] 12301/20000 tracks (61.5%) | elapsed 29.2 min | ETA 18.3 min
+[test] 12401/20000 tracks (62.0%) | elapsed 29.4 min | ETA 18.0 min
+[test] 12501/20000 tracks (62.5%) | elapsed 29.6 min | ETA 17.7 min
+[test] 12601/20000 tracks (63.0%) | elapsed 29.8 min | ETA 17.5 min
+[test] 12701/20000 tracks (63.5%) | elapsed 30.0 min | ETA 17.2 min
+[test] 12801/20000 tracks (64.0%) | elapsed 30.2 min | ETA 17.0 min
+[test] 12901/20000 tracks (64.5%) | elapsed 30.4 min | ETA 16.7 min
+[test] 13001/20000 tracks (65.0%) | elapsed 30.6 min | ETA 16.5 min
+[test] 13101/20000 tracks (65.5%) | elapsed 30.8 min | ETA 16.2 min
+[test] 13201/20000 tracks (66.0%) | elapsed 31.0 min | ETA 16.0 min
+[test] 13301/20000 tracks (66.5%) | elapsed 31.2 min | ETA 15.7 min
+[test] 13401/20000 tracks (67.0%) | elapsed 31.4 min | ETA 15.5 min
+[test] 13501/20000 tracks (67.5%) | elapsed 31.6 min | ETA 15.2 min
+[test] 13601/20000 tracks (68.0%) | elapsed 31.8 min | ETA 15.0 min
+[test] 13701/20000 tracks (68.5%) | elapsed 32.0 min | ETA 14.7 min
+[test] 13801/20000 tracks (69.0%) | elapsed 32.2 min | ETA 14.5 min
+[test] 13901/20000 tracks (69.5%) | elapsed 32.4 min | ETA 14.2 min
+[test] 14001/20000 tracks (70.0%) | elapsed 32.6 min | ETA 14.0 min
+[test] 14101/20000 tracks (70.5%) | elapsed 32.8 min | ETA 13.7 min
+[test] 14201/20000 tracks (71.0%) | elapsed 33.0 min | ETA 13.5 min
+[test] 14301/20000 tracks (71.5%) | elapsed 33.2 min | ETA 13.2 min
+[test] 14401/20000 tracks (72.0%) | elapsed 33.4 min | ETA 13.0 min
+[test] 14501/20000 tracks (72.5%) | elapsed 33.6 min | ETA 12.7 min
+[test] 14601/20000 tracks (73.0%) | elapsed 33.8 min | ETA 12.5 min
+[test] 14701/20000 tracks (73.5%) | elapsed 34.0 min | ETA 12.3 min
+[test] 14801/20000 tracks (74.0%) | elapsed 34.3 min | ETA 12.0 min
+[test] 14901/20000 tracks (74.5%) | elapsed 34.5 min | ETA 11.8 min
+[test] 15001/20000 tracks (75.0%) | elapsed 34.7 min | ETA 11.6 min
+[test] 15101/20000 tracks (75.5%) | elapsed 34.9 min | ETA 11.3 min
+[test] 15201/20000 tracks (76.0%) | elapsed 35.2 min | ETA 11.1 min
+[test] 15301/20000 tracks (76.5%) | elapsed 35.4 min | ETA 10.9 min
+[test] 15401/20000 tracks (77.0%) | elapsed 35.6 min | ETA 10.6 min
+[test] 15501/20000 tracks (77.5%) | elapsed 35.8 min | ETA 10.4 min
+[test] 15601/20000 tracks (78.0%) | elapsed 36.0 min | ETA 10.1 min
+[test] 15701/20000 tracks (78.5%) | elapsed 36.2 min | ETA 9.9 min
+[test] 15801/20000 tracks (79.0%) | elapsed 36.4 min | ETA 9.7 min
+[test] 15901/20000 tracks (79.5%) | elapsed 36.6 min | ETA 9.4 min
+[test] 16001/20000 tracks (80.0%) | elapsed 36.8 min | ETA 9.2 min
+[test] 16101/20000 tracks (80.5%) | elapsed 37.0 min | ETA 9.0 min
+[test] 16201/20000 tracks (81.0%) | elapsed 37.2 min | ETA 8.7 min
+[test] 16301/20000 tracks (81.5%) | elapsed 37.4 min | ETA 8.5 min
+[test] 16401/20000 tracks (82.0%) | elapsed 37.6 min | ETA 8.3 min
+[test] 16501/20000 tracks (82.5%) | elapsed 37.9 min | ETA 8.0 min
+[test] 16601/20000 tracks (83.0%) | elapsed 38.0 min | ETA 7.8 min
+[test] 16701/20000 tracks (83.5%) | elapsed 38.3 min | ETA 7.6 min
+[test] 16801/20000 tracks (84.0%) | elapsed 38.5 min | ETA 7.3 min
+[test] 16901/20000 tracks (84.5%) | elapsed 38.8 min | ETA 7.1 min
+[test] 17001/20000 tracks (85.0%) | elapsed 39.0 min | ETA 6.9 min
+[test] 17101/20000 tracks (85.5%) | elapsed 39.3 min | ETA 6.7 min
+[test] 17201/20000 tracks (86.0%) | elapsed 39.5 min | ETA 6.4 min
+[test] 17301/20000 tracks (86.5%) | elapsed 39.8 min | ETA 6.2 min
+[test] 17401/20000 tracks (87.0%) | elapsed 40.0 min | ETA 6.0 min
+[test] 17501/20000 tracks (87.5%) | elapsed 40.3 min | ETA 5.8 min
+[test] 17601/20000 tracks (88.0%) | elapsed 40.5 min | ETA 5.5 min
+[test] 17701/20000 tracks (88.5%) | elapsed 40.8 min | ETA 5.3 min
+[test] 17801/20000 tracks (89.0%) | elapsed 41.0 min | ETA 5.1 min
+[test] 17901/20000 tracks (89.5%) | elapsed 41.2 min | ETA 4.8 min
+[test] 18001/20000 tracks (90.0%) | elapsed 41.4 min | ETA 4.6 min
+[test] 18101/20000 tracks (90.5%) | elapsed 41.6 min | ETA 4.4 min
+[test] 18201/20000 tracks (91.0%) | elapsed 41.8 min | ETA 4.1 min
+[test] 18301/20000 tracks (91.5%) | elapsed 42.0 min | ETA 3.9 min
+[test] 18401/20000 tracks (92.0%) | elapsed 42.2 min | ETA 3.7 min
+[test] 18501/20000 tracks (92.5%) | elapsed 42.4 min | ETA 3.4 min
+[test] 18601/20000 tracks (93.0%) | elapsed 42.6 min | ETA 3.2 min
+[test] 18701/20000 tracks (93.5%) | elapsed 42.9 min | ETA 3.0 min
+[test] 18801/20000 tracks (94.0%) | elapsed 43.1 min | ETA 2.7 min
+[test] 18901/20000 tracks (94.5%) | elapsed 43.3 min | ETA 2.5 min
+[test] 19001/20000 tracks (95.0%) | elapsed 43.5 min | ETA 2.3 min
+[test] 19101/20000 tracks (95.5%) | elapsed 43.7 min | ETA 2.1 min
+[test] 19201/20000 tracks (96.0%) | elapsed 43.9 min | ETA 1.8 min
+[test] 19301/20000 tracks (96.5%) | elapsed 44.1 min | ETA 1.6 min
+[test] 19401/20000 tracks (97.0%) | elapsed 44.3 min | ETA 1.4 min
+[test] 19501/20000 tracks (97.5%) | elapsed 44.5 min | ETA 1.1 min
+[test] 19601/20000 tracks (98.0%) | elapsed 44.7 min | ETA 0.9 min
+[test] 19701/20000 tracks (98.5%) | elapsed 44.9 min | ETA 0.7 min
+[test] 19801/20000 tracks (99.0%) | elapsed 45.1 min | ETA 0.5 min
+[test] 19901/20000 tracks (99.5%) | elapsed 45.3 min | ETA 0.2 min
+[test] 20000/20000 tracks (100.0%) | elapsed 45.5 min | ETA 0.0 min
+[test] 20000/20000 tracks (100.0%) | elapsed 45.5 min | ETA 0.0 min
+
+==================== OUTPUT SUMMARY ====================
+Script location: /Users/edwardfinkelstein/SDSU_UCI/WhitesonResearch/TrackProject/src/make_tracks_60_weird25_20k.py
+Executed from:   /Users/edwardfinkelstein/SDSU_UCI/WhitesonResearch/TrackProject/src
+Data directory: /Users/edwardfinkelstein/SDSU_UCI/WhitesonResearch/TrackProject/tracks_for_ed/validation_weird25_10k
+40000 files written.
+========================================================
+

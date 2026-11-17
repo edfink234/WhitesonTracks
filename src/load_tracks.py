@@ -75,6 +75,16 @@ def load_single_track(csv_path, param="arc"):
         phi = df["phi"].values
         z   = df["z"].values
         x, y, z = cylindrical_to_cartesian(r, phi, z)
+        
+    order = order_hits_nearest_neighbor(x, y, z, r)
+
+    x = x[order]
+    y = y[order]
+    z = z[order]
+    r = r[order]
+    phi = phi[order]
+
+    df = df.iloc[order].reset_index(drop=True)
     s = None
     if param == "index":
         s = np.arange(len(x), dtype=float) # <-- hit index parameterization
