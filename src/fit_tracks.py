@@ -1416,16 +1416,15 @@ if __name__ == '__main__':
     ADD_TEMPLATE_ONLY = False
     ADD_TEMPLATE_COORD = "all"
     TEMPLATE_PATH = "track_templates.pkl"
-    SYNC_TEMPLATES = False
-    printTemplatesOnly = False
-    #templates_to_delete = {"x_templates": set(range(50,110)), "y_templates": range(50,110), "z_templates": range(50,110)}
+    printTemplatesOnly = True
+    templates_to_delete = {}#{"x_templates": [34], "y_templates": [34], "z_templates": [34]}
     R2_THRESHOLD = 0.997
     RunPySR = False   # Whether to enable (True) or disable (False) PySR discovery
     MaxPySRIters = 100
     num_tracks = 100
 
     CPP_TEMPLATE = r"""
-    ((sin(tanh((x0 * 9.839682808358576))) * -17.43230415238745) + (((45.82850715099027 * arcsin(x0)) * sech(cos(asin(x0)))) + (166.85074093671616 * (tanh(sin(x0)) * (1.346327831726017 - (2.2583182429038966 * sin(x0)))))))
+    ((tanh((10.559108220341434 * x0)) * -13.594170996226426) - ((tanh(x0) * (14.077214779366244 * x0)) * (24.13537635629404 * (x0 + -0.8932606801539666))))
     """
 
     s = sp.Symbol("s")
@@ -1443,7 +1442,7 @@ if __name__ == '__main__':
     loaded = {}
     x_templates, y_templates, z_templates = [], [], []
     
-    track_dataset_idx = 18
+    track_dataset_idx = 20
     out_html = [
         #legacy
         #------
@@ -2809,20 +2808,21 @@ if __name__ == '__main__':
             f"split_helix_ratio_values_{outfile_str}.csv"
         )
 
-        np.savetxt(
+        split_df = pd.DataFrame([
+            {
+                "event_id": info["event_id"],
+                "track_idx": info["track_idx"],
+                "split_idx": info["split_idx"],
+                "log_chi2_split_over_helix": info["log_ratio"],
+                "chi2nu_split": info["chi2nu_split"],
+                "chi2nu_helix": info["chi2nu_full"],
+            }
+            for info in split_infos
+        ])
+
+        split_df.to_csv(
             ratio_txt,
-            np.column_stack([
-                np.asarray(log_split_ratio_all),
-                np.asarray(chi2_split_helix_all),
-                np.asarray(chi2_full_helix_all),
-            ]),
-            delimiter=",",
-            header=(
-                "log_chi2_split_over_helix,"
-                "chi2nu_split,"
-                "chi2nu_helix"
-            ),
-            comments="",
+            index=False,
         )
 
         print(f"Saved split-helix ratio values to {ratio_txt}")

@@ -13,11 +13,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from os import system
 
+POP_B_ONLY = True
 
 FILES = {
     "SM": "../data_files/chi2_ratio_values_mu20_finder_SM_100.csv",
     "PID15": "../data_files/chi2_ratio_values_mu20_finder_PID15_100.csv",
-    "Background-only fakes": "../data_files/chi2_ratio_values_mu20_finder_fakes_100.csv",
+    f"Background-only fakes{' (B) ' if POP_B_ONLY else ''}": ["../data_files/chi2_ratio_values_mu20_finder_fakes_100.csv", "../data_files/chi2_ratio_values_mu20_finder_fakes_100_popB.csv"][POP_B_ONLY],
 }
 
 OUT_HIST = "../pngs/combined_SR_helix_ratio_populations_mu20.png"
